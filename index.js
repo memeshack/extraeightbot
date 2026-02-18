@@ -46,27 +46,29 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
-// ⏰ SCHEDULER ENGINE
+// ⏰ SCHEDULER ENGINE (FIXED BUG)
 // ==========================================
-schedule.scheduleJob('* * * * *', () => {
+schedule.scheduleJob('* * * * *', async () => {
     const now = DateTime.now().toMillis();
     let changed = false;
-    const remainingEvents = calendarEvents.filter(async (ev) => {
+    const remainingEvents = [];
+
+    for (const ev of calendarEvents) {
         if (now >= ev.timestamp) {
             const alert = `🔔 <b>EVENT REMINDER</b>\n━━━━━━━━━━━━━━━━━━\n📝 <b>Event:</b> ${ev.name}\n⏰ <b>Scheduled for:</b> ${ev.dateString}\n━━━━━━━━━━━━━━━━━━\n<i>The event is starting now!</i>`;
             
             try {
                 const sentMsg = await bot.sendMessage(ev.chatId, alert, { parse_mode: 'HTML' });
-                // Pin the message silently
                 await bot.pinChatMessage(ev.chatId, sentMsg.message_id, { disable_notification: true });
+                console.log(`[CALENDAR] Reminder sent and pinned for: ${ev.name}`);
             } catch (e) {
                 console.log(`Error sending/pinning reminder: ${e.message}`);
             }
-            changed = true;
-            return false;
+            changed = true; // Mark that we need to update the file
+        } else {
+            remainingEvents.push(ev); // Keep the event if it's in the future
         }
-        return true;
-    });
+    }
 
     if (changed) {
         calendarEvents = remainingEvents;
@@ -159,7 +161,7 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // 4. /when COMMAND (Open to everyone)
+    // 4. /when COMMAND
     if (text.startsWith('/when') && msg.reply_to_message) {
         const t = msg.reply_to_message;
         const diff = DateTime.now().diff(DateTime.fromSeconds(t.forward_date || t.date), ['years', 'months', 'days', 'hours', 'minutes', 'seconds']).toObject();
@@ -176,10 +178,10 @@ bot.on('message', async (msg) => {
         if (p.length >= 2 && orig) {
             try {
                 const newT = orig.replace(new RegExp(p[0], p[2] || ''), p[1]);
-                if (newT !== orig) bot.sendMessage(chatId, `<i>Did you mean:</i>\n\n${newText}`, { parse_mode: 'HTML', reply_to_message_id: msg.reply_to_message.message_id });
+                if (newT !== orig) bot.sendMessage(chatId, `<i>Did you mean:</i>\n\n${newT}`, { parse_mode: 'HTML', reply_to_message_id: msg.reply_to_message.message_id });
             } catch (e) {}
         }
     }
 });
 
-console.log('🤖 ADMIN-CONTROLLED BOT ACTIVE.');
+console.log('🤖 FIXED ADMIN BOT ACTIVE.');
