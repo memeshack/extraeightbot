@@ -46,32 +46,30 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
-// ⏰ SCHEDULER ENGINE (FIXED BUG)
+// ⏰ SCHEDULER ENGINE (PURGE FIX)
 // ==========================================
 schedule.scheduleJob('* * * * *', async () => {
     const now = DateTime.now().toMillis();
-    let changed = false;
-    const remainingEvents = [];
+    
+    // 1. Separate events into "Due Now" and "Future"
+    const dueEvents = calendarEvents.filter(ev => now >= ev.timestamp);
+    const futureEvents = calendarEvents.filter(ev => now < ev.timestamp);
 
-    for (const ev of calendarEvents) {
-        if (now >= ev.timestamp) {
+    if (dueEvents.length > 0) {
+        for (const ev of dueEvents) {
             const alert = `🔔 <b>EVENT REMINDER</b>\n━━━━━━━━━━━━━━━━━━\n📝 <b>Event:</b> ${ev.name}\n⏰ <b>Scheduled for:</b> ${ev.dateString}\n━━━━━━━━━━━━━━━━━━\n<i>The event is starting now!</i>`;
             
             try {
                 const sentMsg = await bot.sendMessage(ev.chatId, alert, { parse_mode: 'HTML' });
                 await bot.pinChatMessage(ev.chatId, sentMsg.message_id, { disable_notification: true });
-                console.log(`[CALENDAR] Reminder sent and pinned for: ${ev.name}`);
+                console.log(`[CALENDAR] Reminder sent/pinned/purged for: ${ev.name}`);
             } catch (e) {
-                console.log(`Error sending/pinning reminder: ${e.message}`);
+                console.log(`Error sending reminder: ${e.message}`);
             }
-            changed = true; // Mark that we need to update the file
-        } else {
-            remainingEvents.push(ev); // Keep the event if it's in the future
         }
-    }
 
-    if (changed) {
-        calendarEvents = remainingEvents;
+        // 2. Immediately overwrite database with ONLY future events
+        calendarEvents = futureEvents;
         saveData(EVENT_FILE, calendarEvents);
     }
 });
@@ -100,24 +98,31 @@ bot.on('message', async (msg) => {
     const fromId = String(msg.from.id);
     const text = msg.text;
 
-    // 1. AUTO-BAN
-    if (chatId === TARGET_GROUP_ID && bannedUsers.includes(fromId)) {
+    // --- GLOBAL LOCKDOWN ---
+    // If it's not the target group AND not an owner in DMs, ignore everything.
+    const isTargetGroup = (chatId === TARGET_GROUP_ID);
+    const isOwner = OWNER_IDS.includes(fromId);
+
+    if (!isTargetGroup && !isOwner) return;
+
+    // 1. AUTO-BAN (Target Group Only)
+    if (isTargetGroup && bannedUsers.includes(fromId)) {
         bot.deleteMessage(chatId, msg.message_id).catch(() => {});
         bot.banChatMember(chatId, fromId).catch(() => {});
         return;
     }
 
-    // 2. CALENDAR COMMANDS (Admin/Owner Only)
+    // 2. CALENDAR COMMANDS (Admins/Owners Only)
     if (text.startsWith('/event ')) {
         if (!(await isAdmin(chatId, fromId))) return;
 
         const parts = text.replace('/event ', '').split('@');
-        if (parts.length < 2) return bot.sendMessage(chatId, "⚠️ Use: <code>/event Name @ February 20, 2026 at 4:00PM</code>", { parse_mode: 'HTML' });
+        if (parts.length < 2) return bot.sendMessage(chatId, "⚠️ Usage: <code>/event Name @ February 20, 2026 at 4:00PM</code>", { parse_mode: 'HTML' });
         
         const timeInput = parts[1].trim();
         const eventDate = DateTime.fromFormat(timeInput, "MMMM d, yyyy 'at' h:mma", { zone: 'America/New_York' });
 
-        if (!eventDate.isValid) return bot.sendMessage(chatId, "❌ Use format: <code>February 20, 2026 at 4:00PM</code>", { parse_mode: 'HTML' });
+        if (!eventDate.isValid) return bot.sendMessage(chatId, "❌ Date format error.", { parse_mode: 'HTML' });
 
         calendarEvents.push({ name: parts[0].trim(), timestamp: eventDate.toMillis(), dateString: timeInput, chatId });
         saveData(EVENT_FILE, calendarEvents);
@@ -133,27 +138,31 @@ bot.on('message', async (msg) => {
 
     if (text.startsWith('/delevent ')) {
         if (!(await isAdmin(chatId, fromId))) return;
-
         const index = parseInt(text.split(' ')[1]) - 1;
         if (calendarEvents[index]) {
             const removed = calendarEvents.splice(index, 1);
             saveData(EVENT_FILE, calendarEvents);
             bot.sendMessage(chatId, `🗑️ Deleted: <b>${removed[0].name}</b>`, { parse_mode: 'HTML' });
-        } else {
-            bot.sendMessage(chatId, "❌ Event not found.", { parse_mode: 'HTML' });
         }
     }
 
-    // 3. OWNER & UTILITY COMMANDS
-    if (OWNER_IDS.includes(fromId)) {
+    // 3. OWNER-ONLY COMMANDS (Work everywhere for you)
+    if (isOwner) {
         if (text.startsWith("/permban ")) {
             const target = text.split(" ")[1];
             if (!bannedUsers.includes(target)) {
                 bannedUsers.push(target);
                 saveData(BAN_FILE, bannedUsers);
                 bot.sendMessage(chatId, `✅ Banned: \`${target}\``, { parse_mode: "Markdown" });
-                bot.banChatMember(chatId, target).catch(() => {});
+                if (isTargetGroup) bot.banChatMember(chatId, target).catch(() => {});
             }
+        }
+        if (text.startsWith("/unpermban ")) {
+            const target = text.split(" ")[1];
+            bannedUsers = bannedUsers.filter(id => id !== target);
+            saveData(BAN_FILE, bannedUsers);
+            bot.sendMessage(chatId, `✅ Unbanned: \`${target}\``, { parse_mode: "Markdown" });
+            if (isTargetGroup) bot.unbanChatMember(chatId, target, { only_if_banned: true }).catch(() => {});
         }
         if (msg.forward_from || msg.forward_from_chat) {
             let id = msg.forward_from ? msg.forward_from.id : msg.forward_from_chat.id;
@@ -161,27 +170,30 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // 4. /when COMMAND
-    if (text.startsWith('/when') && msg.reply_to_message) {
-        const t = msg.reply_to_message;
-        const diff = DateTime.now().diff(DateTime.fromSeconds(t.forward_date || t.date), ['years', 'months', 'days', 'hours', 'minutes', 'seconds']).toObject();
-        const parts = ['years', 'months', 'days', 'hours', 'minutes', 'seconds']
-            .filter(u => diff[u] > 0 || u === 'seconds')
-            .map(u => `<b>${Math.floor(diff[u])}</b> ${u}`);
-        bot.sendMessage(chatId, `⏳ <b>This message is:</b>\n${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')} old`, { parse_mode: 'HTML', reply_to_message_id: t.message_id });
-    }
+    // 4. UTILITY COMMANDS (Target Group Only)
+    if (isTargetGroup) {
+        // /when
+        if (text.startsWith('/when') && msg.reply_to_message) {
+            const t = msg.reply_to_message;
+            const diff = DateTime.now().diff(DateTime.fromSeconds(t.forward_date || t.date), ['years', 'months', 'days', 'hours', 'minutes', 'seconds']).toObject();
+            const parts = ['years', 'months', 'days', 'hours', 'minutes', 'seconds']
+                .filter(u => diff[u] > 0 || u === 'seconds')
+                .map(u => `<b>${Math.floor(diff[u])}</b> ${u}`);
+            bot.sendMessage(chatId, `⏳ <b>This message is:</b>\n${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')} old`, { parse_mode: 'HTML', reply_to_message_id: t.message_id });
+        }
 
-    // 5. REGEX s/
-    if (text.startsWith('s/') && msg.reply_to_message) {
-        const orig = msg.reply_to_message.text || msg.reply_to_message.caption;
-        const p = text.slice(2).split('/');
-        if (p.length >= 2 && orig) {
-            try {
-                const newT = orig.replace(new RegExp(p[0], p[2] || ''), p[1]);
-                if (newT !== orig) bot.sendMessage(chatId, `<i>Did you mean:</i>\n\n${newT}`, { parse_mode: 'HTML', reply_to_message_id: msg.reply_to_message.message_id });
-            } catch (e) {}
+        // Regex s/
+        if (text.startsWith('s/') && msg.reply_to_message) {
+            const orig = msg.reply_to_message.text || msg.reply_to_message.caption;
+            const p = text.slice(2).split('/');
+            if (p.length >= 2 && orig) {
+                try {
+                    const newT = orig.replace(new RegExp(p[0], p[2] || ''), p[1]);
+                    if (newT !== orig) bot.sendMessage(chatId, `<i>Did you mean:</i>\n\n${newT}`, { parse_mode: 'HTML', reply_to_message_id: msg.reply_to_message.message_id });
+                } catch (e) {}
+            }
         }
     }
 });
 
-console.log('🤖 FIXED ADMIN BOT ACTIVE.');
+console.log('🤖 LOCKDOWN BOT ACTIVE.');
