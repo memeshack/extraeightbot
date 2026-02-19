@@ -188,7 +188,6 @@ bot.on('message', async (msg) => {
     if (eventSetupState[fromId] && eventSetupState[fromId].chatId === chatId) {
         const state = eventSetupState[fromId];
 
-        // If they type /cancel, abort the wizard
         if (text === '/cancel') {
             bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
             bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{});
@@ -204,7 +203,11 @@ bot.on('message', async (msg) => {
             bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
             bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
 
-            const prompt = await bot.sendMessage(chatId, "📅 What is the date? (e.g., `February 20, 2026`)", { parse_mode: 'Markdown' });
+            // ⚠️ REPLY TO ORIGINAL COMMAND
+            const prompt = await bot.sendMessage(chatId, "📅 What is the date? (e.g., `February 20, 2026`)", { 
+                parse_mode: 'Markdown',
+                reply_to_message_id: state.triggerMsgId 
+            });
             state.lastPromptId = prompt.message_id;
             return;
         }
@@ -217,12 +220,16 @@ bot.on('message', async (msg) => {
             bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
             bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
 
-            const prompt = await bot.sendMessage(chatId, "⏰ What time? (e.g., `4:00 PM`)", { parse_mode: 'Markdown' });
+            // ⚠️ REPLY TO ORIGINAL COMMAND
+            const prompt = await bot.sendMessage(chatId, "⏰ What time? (e.g., `4:00 PM`)", { 
+                parse_mode: 'Markdown',
+                reply_to_message_id: state.triggerMsgId 
+            });
             state.lastPromptId = prompt.message_id;
             return;
         }
 
-        // STEP 3: TIME received & KEYBOARD
+        // STEP 3: TIME received
         if (state.step === 'TIME') {
             state.eventTime = text;
             state.step = 'TIMEZONE';
@@ -230,7 +237,6 @@ bot.on('message', async (msg) => {
             bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
             bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
 
-            // ⚠️ UPDATED BUTTONS
             const keyboard = {
                 inline_keyboard: [
                     [{ text: "🕒 PST", callback_data: `TZ_America/Los_Angeles` }, { text: "🕒 CST", callback_data: `TZ_America/Chicago` }],
@@ -239,7 +245,11 @@ bot.on('message', async (msg) => {
                 ]
             };
 
-            const prompt = await bot.sendMessage(chatId, "🌍 Select the Time Zone:", { reply_markup: keyboard });
+            // ⚠️ REPLY TO ORIGINAL COMMAND
+            const prompt = await bot.sendMessage(chatId, "🌍 Select the Time Zone:", { 
+                reply_markup: keyboard,
+                reply_to_message_id: state.triggerMsgId 
+            });
             state.lastPromptId = prompt.message_id;
             return;
         }
@@ -249,7 +259,10 @@ bot.on('message', async (msg) => {
     if (text === '/newevent') {
         if (!(await isAdmin(chatId, fromId))) return;
         
-        const prompt = await bot.sendMessage(chatId, "📝 What is the name of your event?");
+        // ⚠️ START THREAD ON THIS MESSAGE
+        const prompt = await bot.sendMessage(chatId, "📝 What is the name of your event?", {
+            reply_to_message_id: msg.message_id 
+        });
         
         eventSetupState[fromId] = {
             chatId: chatId,
@@ -387,7 +400,6 @@ bot.on('callback_query', async (query) => {
             return bot.sendMessage(chatId, "🚫 Event creation cancelled.", { reply_to_message_id: state.triggerMsgId });
         }
 
-        // ⚠️ MAP TIMEZONES TO ABBREVIATIONS FOR CLEANER OUTPUT
         const tzNames = {
             'America/Los_Angeles': 'PST',
             'America/Chicago': 'CST',
@@ -417,7 +429,7 @@ bot.on('callback_query', async (query) => {
 
         bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
 
-        // ⚠️ USES THE CLEAN 'displayTz' ABBREVIATION IN SUCCESS MESSAGE
+        // ⚠️ REPLY FINAL MESSAGE TO ORIGINAL COMMAND
         bot.sendMessage(chatId, `✅ <b>Event Successfully Scheduled!</b>\n\n📝 <b>Name:</b> ${state.eventName}\n📅 <b>Time:</b> ${state.eventDate} @ ${state.eventTime}\n🌍 <b>Zone:</b> ${displayTz}\n\n<i>I will pin a reminder when it starts.</i>`, { 
             parse_mode: 'HTML',
             reply_to_message_id: state.triggerMsgId
@@ -428,4 +440,4 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-console.log('🤖 WIZARD BOT (ABBR. TIMEZONES) ONLINE.');
+console.log('🤖 WIZARD BOT (THREADED) ONLINE.');
