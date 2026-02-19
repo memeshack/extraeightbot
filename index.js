@@ -3,13 +3,13 @@ const { DateTime } = require('luxon');
 const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const Groq = require('groq-sdk');
 
 // ==========================================
 // ⚙️ CONFIGURATION
 // ==========================================
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
-const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; 
+const GROQ_API_KEY = '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'; // ⚠️ PASTE GROQ KEY HERE
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
 const TARGET_GROUP_ID = "-1002372844799"; 
@@ -25,9 +25,8 @@ const bot = new TelegramBot(TOKEN, {
     }
 });
 
-// Initialize Gemini (Free Model)
-const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+// Initialize Groq
+const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -54,16 +53,25 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
-// 🧠 AI ENGINE (FIXED)
+// 🧠 GROQ AI ENGINE
 // ==========================================
-async function askGemini(prompt) {
+async function askGroq(prompt) {
     try {
-        // We use generateContent for stability (no history management needed)
-        const result = await model.generateContent(prompt);
-        return result.response.text();
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "user",
+                    content: prompt,
+                },
+            ],
+            model: "llama-3.3-70b-versatile",
+            temperature: 0.7,
+            max_tokens: 1024,
+        });
+
+        return chatCompletion.choices[0]?.message?.content || "⚠️ Empty response from AI.";
     } catch (error) {
-        console.error("Gemini API Error:", error.message);
-        if (error.message.includes("429")) return "⚠️ **Rate Limit:** I'm thinking too fast! Please wait a moment.";
+        console.error("Groq API Error:", error.message);
         return "⚠️ I couldn't reach the AI brain right now.";
     }
 }
@@ -126,7 +134,7 @@ bot.on('message', async (msg) => {
     }
 
     // ==========================================
-    // 🤖 AI COMMANDS (UPDATED)
+    // 🤖 AI COMMANDS (GROQ)
     // ==========================================
     
     // Interactive Mode
@@ -143,32 +151,30 @@ bot.on('message', async (msg) => {
         if (!query) return;
 
         bot.sendChatAction(chatId, 'typing');
-        const response = await askGemini(query);
+        const response = await askGroq(query);
         
-        // Removed header, added reply tag
+        // Uses Markdown for clean code blocks
         return bot.sendMessage(chatId, response, { 
             parse_mode: 'Markdown',
             reply_to_message_id: msg.message_id 
         });
     }
 
-    // Reply Context Mode (The FIX is here)
+    // Reply Context Mode
     if (msg.reply_to_message) {
         const self = await bot.getMe();
         if (msg.reply_to_message.from.id === self.id) {
             
-            // We assume any reply to the bot is a follow-up conversation
-            // (You can add a check for "🤖" if you want to be strict, but this feels more natural)
+            // Allow replying to ANY message sent by the bot (assuming it's a conversation)
             const previousResponse = msg.reply_to_message.text || "";
             const currentQuery = text;
 
             bot.sendChatAction(chatId, 'typing');
 
-            // 🛠️ THE FIX: Inject context into the prompt string instead of the history object
-            // This avoids the "Role must be user" error completely.
-            const fullPrompt = `Context of our conversation:\nAI: ${previousResponse}\n\nUser: ${currentQuery}`;
+            // Inject context into the user prompt
+            const fullPrompt = `Context of our conversation:\nAI said: ${previousResponse}\n\nUser says: ${currentQuery}`;
 
-            const response = await askGemini(fullPrompt);
+            const response = await askGroq(fullPrompt);
             
             return bot.sendMessage(chatId, response, { 
                 parse_mode: 'Markdown',
@@ -261,4 +267,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 BOT ONLINE.');
+console.log('🤖 GROQ BOT ONLINE.');
