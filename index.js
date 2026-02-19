@@ -192,18 +192,17 @@ bot.on('message', async (msg) => {
             return bot.sendMessage(chatId, "🚫 Event creation cancelled.", { reply_to_message_id: state.triggerMsgId });
         }
 
-        // STRICT REPLY CHECK: Ensure they are actively replying to the bot's prompt
+        // STRICT REPLY CHECK
         if (msg.reply_to_message && msg.reply_to_message.message_id === state.lastPromptId) {
             
-            // STEP 1: NAME received -> Move to MONTH (Inline Keyboard)
+            // STEP 1: NAME received -> Move to MONTH
             if (state.step === 'NAME') {
                 state.eventName = text;
                 state.step = 'MONTH';
                 
-                bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); // Delete user answer
-                bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); // Delete bot prompt
+                bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
+                bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
 
-                // Create a 3x4 grid for Months
                 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
                 let monthKb = [];
                 for (let i = 0; i < 12; i+=3) {
@@ -249,12 +248,11 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // 2. TRIGGER WIZARD (No Force Reply, Just Instructions)
+    // 2. TRIGGER WIZARD (Cleaned up text)
     if (text === '/newevent') {
         if (!(await isAdmin(chatId, fromId))) return;
         
-        const prompt = await bot.sendMessage(chatId, "📝 What is the name of your event?\n\n_(Please reply to this message)_", {
-            parse_mode: "Markdown",
+        const prompt = await bot.sendMessage(chatId, "📝 What is the name of your event?", {
             reply_to_message_id: msg.message_id
         });
         
@@ -275,7 +273,7 @@ bot.on('message', async (msg) => {
     if (!text.startsWith('/')) addToHistory(name, text);
 
     if (text === '/ai') {
-        return bot.sendMessage(chatId, "What's up?\n\n_(Reply to this message)_", { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
+        return bot.sendMessage(chatId, "What's up?", { reply_to_message_id: msg.message_id });
     }
 
     if (text.startsWith('/ai ')) {
@@ -288,7 +286,7 @@ bot.on('message', async (msg) => {
 
     if (msg.reply_to_message && msg.reply_to_message.from.id === (await bot.getMe()).id && !text.startsWith('/')) {
         if (eventSetupState[fromId] && msg.reply_to_message.message_id === eventSetupState[fromId].lastPromptId) {
-            return; // Don't let AI respond if user is answering a Wizard step
+            return; 
         }
         bot.sendChatAction(chatId, 'typing');
         const response = await askGroq(text);
@@ -368,7 +366,9 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, `✅ Unbanned: \`${target}\``, { parse_mode: "Markdown" });
             if (isTargetGroup) bot.unbanChatMember(chatId, target, { only_if_banned: true }).catch(() => {});
         }
-        if (msg.forward_from || msg.forward_from_chat) {
+        
+        // ⚠️ FIXED: Only extract ID if the forward is happening in a PRIVATE message
+        if ((msg.forward_from || msg.forward_from_chat) && msg.chat.type === 'private') {
             let id = msg.forward_from ? msg.forward_from.id : msg.forward_from_chat.id;
             bot.sendMessage(chatId, `🎯 **ID:** \`${id}\``, { parse_mode: "Markdown" });
         }
@@ -383,7 +383,6 @@ bot.on('callback_query', async (query) => {
     const chatId = String(query.message.chat.id);
     const fromId = String(query.from.id);
 
-    // General Check
     const state = eventSetupState[fromId];
     if (!state || state.chatId !== chatId) {
         return bot.answerCallbackQuery(query.id, { text: "This isn't your event setup!", show_alert: true });
@@ -400,9 +399,8 @@ bot.on('callback_query', async (query) => {
         state.eventMonth = data.replace('MONTH_', '');
         state.step = 'DAY';
         
-        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{}); // Delete Month keyboard
+        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{}); 
 
-        // Calculate days in that month for the current year
         const currentYear = DateTime.now().year;
         const daysInMonth = DateTime.local(currentYear, parseInt(state.eventMonth)).daysInMonth;
 
@@ -425,14 +423,14 @@ bot.on('callback_query', async (query) => {
         return bot.answerCallbackQuery(query.id);
     }
 
-    // STEP 3: DAY received -> Move to TIME (Text Input)
+    // STEP 3: DAY received -> Move to TIME (Cleaned up text)
     if (data.startsWith('DAY_')) {
         state.eventDay = data.replace('DAY_', '');
         state.step = 'TIME';
 
-        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{}); // Delete Day keyboard
+        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{}); 
 
-        const prompt = await bot.sendMessage(chatId, "⏰ What time? (e.g., `4:00 PM`)\n\n_(Please reply to this message)_", { 
+        const prompt = await bot.sendMessage(chatId, "⏰ What time? (e.g., `4:00 PM`)", { 
             parse_mode: 'Markdown',
             reply_to_message_id: state.triggerMsgId 
         });
@@ -443,7 +441,7 @@ bot.on('callback_query', async (query) => {
     // STEP 5: TIMEZONE received -> FINALIZE
     if (data.startsWith('TZ_')) {
         const tz = data.replace('TZ_', '');
-        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{}); // Delete TZ keyboard
+        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{}); 
 
         const tzNames = {
             'America/Los_Angeles': 'PST',
@@ -453,15 +451,12 @@ bot.on('callback_query', async (query) => {
         };
         const displayTz = tzNames[tz] || tz;
 
-        // Clean up time input (e.g., format "4:00pm" to "4:00 PM")
         let safeTime = state.eventTime.trim().toUpperCase().replace(/\s*([AP]M)/, ' $1');
 
-        // Compile date
         let year = DateTime.now().year;
         const dateString = `${state.eventMonth}/${state.eventDay}/${year} ${safeTime}`;
         let eventDate = DateTime.fromFormat(dateString, "M/d/yyyy h:mm a", { zone: tz });
 
-        // If the date has already passed this year, assume they mean next year
         if (eventDate.isValid && eventDate < DateTime.now()) {
             eventDate = eventDate.plus({ years: 1 });
             year += 1;
@@ -472,7 +467,6 @@ bot.on('callback_query', async (query) => {
             return bot.sendMessage(chatId, `❌ **Format Error!**\nI couldn't understand the time: \`${state.eventTime}\`\nIt must look like \`4:00 PM\`.\nPlease start over with /newevent.`, { parse_mode: 'Markdown', reply_to_message_id: state.triggerMsgId });
         }
 
-        // Save Event
         calendarEvents.push({ 
             name: state.eventName, 
             timestamp: eventDate.toMillis(), 
@@ -491,4 +485,4 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-console.log('🤖 WIZARD BOT (INTERACTIVE CALENDAR) ONLINE.');
+console.log('🤖 ULTIMATE WIZARD BOT ONLINE.');
