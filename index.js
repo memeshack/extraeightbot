@@ -24,7 +24,7 @@ const bot = new TelegramBot(TOKEN, {
     polling: {
         interval: 100,
         autoStart: true,
-        params: { allowed_updates: ["message", "chat_member", "my_chat_member"] }
+        params: { allowed_updates: ["message", "chat_member", "my_chat_member", "callback_query"] }
     }
 });
 
@@ -39,7 +39,6 @@ const loadData = (file) => {
         return JSON.parse(fs.readFileSync(file, "utf8")) || [];
     } catch (e) { return []; }
 };
-
 const saveData = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2));
 
 let bannedUsers = loadData(BAN_FILE);
@@ -48,12 +47,13 @@ let botMemories = loadData(MEMORY_FILE);
 
 // 🧠 SHORT-TERM CONTEXT BUFFER
 let recentChatHistory = []; 
-
 function addToHistory(username, text) {
-    const entry = `${username}: ${text}`;
-    recentChatHistory.push(entry);
+    recentChatHistory.push(`${username}: ${text}`);
     if (recentChatHistory.length > 15) recentChatHistory.shift(); 
 }
+
+// 🗓️ EVENT WIZARD STATE
+let eventSetupState = {}; 
 
 async function isAdmin(chatId, userId) {
     if (OWNER_IDS.includes(String(userId))) return true;
@@ -63,19 +63,13 @@ async function isAdmin(chatId, userId) {
     } catch (e) { return false; }
 }
 
-// ==========================================
 // 🛡️ HELPER: SAFE REPLY
-// ==========================================
-// This stops the bot from crashing if a user deletes their message
 async function safeReply(chatId, text, replyToId) {
     try {
         await bot.sendMessage(chatId, text, { reply_to_message_id: replyToId });
     } catch (error) {
-        // If reply fails (message deleted), send normally
         if (error.response && error.response.statusCode === 400) {
             await bot.sendMessage(chatId, text);
-        } else {
-            console.error("Msg Error:", error.message);
         }
     }
 }
@@ -114,7 +108,6 @@ async function askGroq(userPrompt) {
 
         let response = chatCompletion.choices[0]?.message?.content || "⚠️ Empty response.";
 
-        // 3. Extract Memories
         if (response.includes("SAVE_MEM:")) {
             const parts = response.split("SAVE_MEM:");
             const cleanResponse = parts[0].trim();
@@ -123,18 +116,12 @@ async function askGroq(userPrompt) {
             if (memoryToSave && !botMemories.includes(memoryToSave)) {
                 botMemories.push(memoryToSave);
                 saveData(MEMORY_FILE, botMemories);
-                console.log(`🧠 AUTO-LEARNED: ${memoryToSave}`);
-                
-                // 📨 LOG TO OWNER
                 bot.sendMessage(LOG_ID, `🧠 **I Learned Something New!**\n\n${memoryToSave}`, { parse_mode: 'Markdown' }).catch(() => {});
             }
             return cleanResponse;
         }
-
         return response;
-
     } catch (error) {
-        console.error("Groq Error:", error.message);
         return "⚠️ I couldn't reach the AI brain right now.";
     }
 }
@@ -197,53 +184,112 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // 1. UPDATE CONTEXT
-    addToHistory(name, text);
+    // 1. EVENT CREATION WIZARD (INTERCEPTOR)
+    if (eventSetupState[fromId] && eventSetupState[fromId].chatId === chatId) {
+        const state = eventSetupState[fromId];
 
-    // ==========================================
-    // 🤖 AI COMMANDS
-    // ==========================================
-    
-    // Interactive Mode
-    if (text === '/ai') {
-        return bot.sendMessage(chatId, "What's up?", { 
-            reply_markup: { force_reply: true },
-            reply_to_message_id: msg.message_id 
-        });
-    }
+        // If they type /cancel, abort the wizard
+        if (text === '/cancel') {
+            bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+            bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{});
+            delete eventSetupState[fromId];
+            return bot.sendMessage(chatId, "🚫 Event creation cancelled.", { reply_to_message_id: state.triggerMsgId });
+        }
 
-    // Direct Mode
-    if (text.startsWith('/ai ')) {
-        const query = text.replace('/ai ', '').trim();
-        if (!query) return;
-
-        bot.sendChatAction(chatId, 'typing');
-        const response = await askGroq(query);
-        
-        return safeReply(chatId, response, msg.message_id);
-    }
-
-    // Natural Reply Mode
-    if (msg.reply_to_message) {
-        const self = await bot.getMe();
-        if (msg.reply_to_message.from.id === self.id) {
+        // STEP 1: NAME received
+        if (state.step === 'NAME') {
+            state.eventName = text;
+            state.step = 'DATE';
             
-            bot.sendChatAction(chatId, 'typing');
-            const response = await askGroq(text);
-            
-            return safeReply(chatId, response, msg.message_id);
+            bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
+            bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
+
+            const prompt = await bot.sendMessage(chatId, "📅 What is the date? (e.g., `February 20, 2026`)", { parse_mode: 'Markdown' });
+            state.lastPromptId = prompt.message_id;
+            return;
+        }
+
+        // STEP 2: DATE received
+        if (state.step === 'DATE') {
+            state.eventDate = text;
+            state.step = 'TIME';
+
+            bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
+            bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
+
+            const prompt = await bot.sendMessage(chatId, "⏰ What time? (e.g., `4:00 PM`)", { parse_mode: 'Markdown' });
+            state.lastPromptId = prompt.message_id;
+            return;
+        }
+
+        // STEP 3: TIME received & KEYBOARD
+        if (state.step === 'TIME') {
+            state.eventTime = text;
+            state.step = 'TIMEZONE';
+
+            bot.deleteMessage(chatId, msg.message_id).catch(()=>{}); 
+            bot.deleteMessage(chatId, state.lastPromptId).catch(()=>{}); 
+
+            // ⚠️ UPDATED BUTTONS
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "🕒 PST", callback_data: `TZ_America/Los_Angeles` }, { text: "🕒 CST", callback_data: `TZ_America/Chicago` }],
+                    [{ text: "🕒 EST", callback_data: `TZ_America/New_York` }, { text: "🕒 GMT", callback_data: `TZ_Europe/London` }],
+                    [{ text: "❌ Cancel", callback_data: `TZ_CANCEL` }]
+                ]
+            };
+
+            const prompt = await bot.sendMessage(chatId, "🌍 Select the Time Zone:", { reply_markup: keyboard });
+            state.lastPromptId = prompt.message_id;
+            return;
         }
     }
 
-    // ==========================================
-    // 🧠 MEMORY MANAGEMENT (Manual)
-    // ==========================================
+    // 2. TRIGGER WIZARD
+    if (text === '/newevent') {
+        if (!(await isAdmin(chatId, fromId))) return;
+        
+        const prompt = await bot.sendMessage(chatId, "📝 What is the name of your event?");
+        
+        eventSetupState[fromId] = {
+            chatId: chatId,
+            step: 'NAME',
+            triggerMsgId: msg.message_id, 
+            lastPromptId: prompt.message_id,
+            eventName: '',
+            eventDate: '',
+            eventTime: ''
+        };
+        return;
+    }
+
+    // 3. UPDATE CONTEXT & NORMAL COMMANDS
+    if (!text.startsWith('/')) addToHistory(name, text);
+
+    if (text === '/ai') {
+        return bot.sendMessage(chatId, "What's up?", { reply_markup: { force_reply: true }, reply_to_message_id: msg.message_id });
+    }
+
+    if (text.startsWith('/ai ')) {
+        const query = text.replace('/ai ', '').trim();
+        if (!query) return;
+        bot.sendChatAction(chatId, 'typing');
+        const response = await askGroq(query);
+        return safeReply(chatId, response, msg.message_id);
+    }
+
+    if (msg.reply_to_message && msg.reply_to_message.from.id === (await bot.getMe()).id && !text.startsWith('/')) {
+        bot.sendChatAction(chatId, 'typing');
+        const response = await askGroq(text);
+        return safeReply(chatId, response, msg.message_id);
+    }
+
+    // MEMORY COMMANDS
     if (text === '/memories' && (await isAdmin(chatId, fromId))) {
         if (botMemories.length === 0) return bot.sendMessage(chatId, "🧠 My mind is empty.");
         const list = botMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
         return bot.sendMessage(chatId, `🧠 <b>Long-Term Memories:</b>\n\n${list}`, { parse_mode: 'HTML' });
     }
-    
     if (text.startsWith('/forget ') && (await isAdmin(chatId, fromId))) {
         const index = parseInt(text.split(' ')[1]) - 1;
         if (botMemories[index]) {
@@ -253,24 +299,7 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // ==========================================
-    // 🗓️ CALENDAR
-    // ==========================================
-    if (text.startsWith('/event ')) {
-        if (!(await isAdmin(chatId, fromId))) return;
-        const parts = text.replace('/event ', '').split('@');
-        if (parts.length < 2) return bot.sendMessage(chatId, "⚠️ Usage: <code>/event Name @ February 20, 2026 at 4:00PM</code>", { parse_mode: 'HTML' });
-        
-        const timeInput = parts[1].trim();
-        const eventDate = DateTime.fromFormat(timeInput, "MMMM d, yyyy 'at' h:mma", { zone: 'America/New_York' });
-
-        if (!eventDate.isValid) return bot.sendMessage(chatId, "❌ Date format error.", { parse_mode: 'HTML' });
-
-        calendarEvents.push({ name: parts[0].trim(), timestamp: eventDate.toMillis(), dateString: timeInput, chatId });
-        saveData(EVENT_FILE, calendarEvents);
-        bot.sendMessage(chatId, `✅ <b>Scheduled:</b> ${parts[0].trim()}`, { parse_mode: 'HTML' });
-    }
-
+    // CALENDAR LIST & DELETE
     if (text === '/events') {
         if (calendarEvents.length === 0) return bot.sendMessage(chatId, "📅 No upcoming events.");
         const list = calendarEvents.sort((a, b) => a.timestamp - b.timestamp)
@@ -288,9 +317,7 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // ==========================================
-    // 🛠️ UTILITY & OWNER
-    // ==========================================
+    // UTILITY & OWNER
     if (isTargetGroup) {
         if (text.startsWith('/when') && msg.reply_to_message) {
             const t = msg.reply_to_message;
@@ -337,4 +364,68 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 CRASH-PROOF BOT ONLINE.');
+// ==========================================
+// 🕹️ INLINE BUTTON HANDLER
+// ==========================================
+bot.on('callback_query', async (query) => {
+    const data = query.data;
+    const chatId = String(query.message.chat.id);
+    const fromId = String(query.from.id);
+
+    if (data.startsWith('TZ_')) {
+        const state = eventSetupState[fromId];
+        
+        if (!state || state.chatId !== chatId) {
+            return bot.answerCallbackQuery(query.id, { text: "This isn't your event setup!", show_alert: true });
+        }
+
+        const tz = data.replace('TZ_', '');
+
+        if (tz === 'CANCEL') {
+            bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
+            delete eventSetupState[fromId];
+            return bot.sendMessage(chatId, "🚫 Event creation cancelled.", { reply_to_message_id: state.triggerMsgId });
+        }
+
+        // ⚠️ MAP TIMEZONES TO ABBREVIATIONS FOR CLEANER OUTPUT
+        const tzNames = {
+            'America/Los_Angeles': 'PST',
+            'America/Chicago': 'CST',
+            'America/New_York': 'EST',
+            'Europe/London': 'GMT'
+        };
+        const displayTz = tzNames[tz] || tz;
+
+        const combinedString = `${state.eventDate} ${state.eventTime}`;
+        const eventDate = DateTime.fromFormat(combinedString, "MMMM d, yyyy h:mm a", { zone: tz });
+
+        if (!eventDate.isValid) {
+            bot.answerCallbackQuery(query.id, { text: "Error parsing date/time. Try again.", show_alert: true });
+            bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
+            delete eventSetupState[fromId];
+            return bot.sendMessage(chatId, `❌ **Format Error!**\nI couldn't understand: \`${combinedString}\`\nPlease start over with /newevent and use exactly this format: \`February 20, 2026\` and \`4:00 PM\``, { parse_mode: 'Markdown', reply_to_message_id: state.triggerMsgId });
+        }
+
+        // Save Event
+        calendarEvents.push({ 
+            name: state.eventName, 
+            timestamp: eventDate.toMillis(), 
+            dateString: `${state.eventDate} at ${state.eventTime} (${displayTz})`, 
+            chatId: chatId 
+        });
+        saveData(EVENT_FILE, calendarEvents);
+
+        bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
+
+        // ⚠️ USES THE CLEAN 'displayTz' ABBREVIATION IN SUCCESS MESSAGE
+        bot.sendMessage(chatId, `✅ <b>Event Successfully Scheduled!</b>\n\n📝 <b>Name:</b> ${state.eventName}\n📅 <b>Time:</b> ${state.eventDate} @ ${state.eventTime}\n🌍 <b>Zone:</b> ${displayTz}\n\n<i>I will pin a reminder when it starts.</i>`, { 
+            parse_mode: 'HTML',
+            reply_to_message_id: state.triggerMsgId
+        });
+
+        delete eventSetupState[fromId];
+        bot.answerCallbackQuery(query.id);
+    }
+});
+
+console.log('🤖 WIZARD BOT (ABBR. TIMEZONES) ONLINE.');
