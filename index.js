@@ -77,7 +77,7 @@ async function safeReply(chatId, text, replyToId) {
 }
 
 // ==========================================
-// 🎂 BIRTHDAY ENGINE (With Confetti!)
+// 🎂 BIRTHDAY ENGINE (With Confetti & Safe Pin)
 // ==========================================
 async function triggerBirthdayCard(chatId, bday) {
     try {
@@ -92,14 +92,12 @@ async function triggerBirthdayCard(chatId, bday) {
             // 1. Load User's Profile Picture
             const image = await Jimp.read(imageUrl);
 
-            // 2. Load and Overlay Confetti (if file exists)
+            // 2. Load and Overlay Confetti
             const confettiPath = path.join(__dirname, 'confetti.png');
             if (fs.existsSync(confettiPath)) {
                 try {
                     const confetti = await Jimp.read(confettiPath);
-                    // Resize confetti to match the PFP size exactly
                     confetti.resize(image.bitmap.width, image.bitmap.height);
-                    // Layer confetti on top starting at top-left corner (0,0)
                     image.composite(confetti, 0, 0);
                 } catch (err) {
                     console.error("Error adding confetti overlay:", err);
@@ -111,14 +109,12 @@ async function triggerBirthdayCard(chatId, bday) {
             const fontBlack = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
             const textStr = "HAPPY BIRTHDAY";
             
-            // Black shadow
             image.print(fontBlack, 2, 2, {
                 text: textStr,
                 alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
                 alignmentY: Jimp.VERTICAL_ALIGN_BOTTOM
             }, image.bitmap.width, image.bitmap.height - 40);
             
-            // White text
             image.print(fontWhite, 0, 0, {
                 text: textStr,
                 alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
@@ -128,17 +124,29 @@ async function triggerBirthdayCard(chatId, bday) {
             imageBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
         }
 
-        // Tag formulation
         const tag = bday.username ? `@${bday.username}` : `[${bday.name}](tg://user?id=${bday.userId})`;
-        // ⚠️ UPDATED CAPTION (Removed extra text)
         const caption = `🎉 🎂 **HAPPY BIRTHDAY ${tag}!** 🎂 🎉`;
 
+        let sentMsg;
+
         if (imageBuffer) {
-            await bot.sendPhoto(chatId, imageBuffer, { caption: caption, parse_mode: 'Markdown' });
+            sentMsg = await bot.sendPhoto(chatId, imageBuffer, { caption: caption, parse_mode: 'Markdown' });
         } else {
-            // Fallback if no PFP
-            await bot.sendMessage(chatId, caption, { parse_mode: 'Markdown' });
+            sentMsg = await bot.sendMessage(chatId, caption, { parse_mode: 'Markdown' });
         }
+
+        // 📌 SAFE PIN: Wait 1 second for Telegram to process the media, then pin
+        if (sentMsg && sentMsg.message_id) {
+            setTimeout(async () => {
+                try {
+                    await bot.pinChatMessage(chatId, sentMsg.message_id, { disable_notification: true });
+                    console.log(`📌 Successfully pinned birthday message for ${bday.name}!`);
+                } catch (pinErr) {
+                    console.error("❌ Pin Error:", pinErr.message);
+                }
+            }, 1000); 
+        }
+
     } catch (e) {
         console.error("Birthday Error:", e.message);
     }
@@ -359,7 +367,6 @@ bot.on('message', async (msg) => {
     if (text.startsWith('/setbday ')) {
         const dateMatch = text.replace('/setbday ', '').trim();
         
-        // Ensure format is MM-DD
         if (!/^\d{2}-\d{2}$/.test(dateMatch)) {
             return bot.sendMessage(chatId, "⚠️ Use format: `/setbday MM-DD` (e.g., `/setbday 05-24`)", { parse_mode: 'Markdown' });
         }
@@ -369,7 +376,6 @@ bot.on('message', async (msg) => {
             targetUser = msg.reply_to_message.from;
         }
 
-        // Remove old entry if updating
         birthdays = birthdays.filter(b => b.userId !== String(targetUser.id));
         
         birthdays.push({
@@ -389,7 +395,6 @@ bot.on('message', async (msg) => {
         return bot.sendMessage(chatId, `🎈 **Upcoming Birthdays:**\n\n${list}`, { parse_mode: 'Markdown' });
     }
 
-    // Test the image generation
     if (text === '/testbday' && isOwner) {
         bot.sendMessage(chatId, "⏳ Generating test birthday card...");
         return triggerBirthdayCard(chatId, {
@@ -614,4 +619,4 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-console.log('🤖 BOT ONLINE WITH BIRTHDAYS & CONFETTI.');
+console.log('🤖 ULTIMATE MASTER BOT ONLINE.');
