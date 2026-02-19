@@ -9,7 +9,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ⚙️ CONFIGURATION
 // ==========================================
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
-const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; // ⚠️ RE-PASTE YOUR KEY HERE
+const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; 
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
 const TARGET_GROUP_ID = "-1002372844799"; 
@@ -25,7 +25,7 @@ const bot = new TelegramBot(TOKEN, {
     }
 });
 
-// Initialize Gemini (USING THE STABLE FREE MODEL)
+// Initialize Gemini (Free Model)
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
@@ -54,23 +54,16 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
-// 🧠 AI ENGINE
+// 🧠 AI ENGINE (FIXED)
 // ==========================================
-async function askGemini(prompt, chatHistory = []) {
+async function askGemini(prompt) {
     try {
-        const chat = model.startChat({
-            history: chatHistory,
-        });
-
-        const result = await chat.sendMessage(prompt);
+        // We use generateContent for stability (no history management needed)
+        const result = await model.generateContent(prompt);
         return result.response.text();
     } catch (error) {
-        // Log the exact error to console for debugging
         console.error("Gemini API Error:", error.message);
-        
-        if (error.message.includes("429")) {
-            return "⚠️ **Rate Limit:** I'm thinking too fast! Please wait a moment and try again.";
-        }
+        if (error.message.includes("429")) return "⚠️ **Rate Limit:** I'm thinking too fast! Please wait a moment.";
         return "⚠️ I couldn't reach the AI brain right now.";
     }
 }
@@ -133,14 +126,14 @@ bot.on('message', async (msg) => {
     }
 
     // ==========================================
-    // 🤖 AI COMMANDS
+    // 🤖 AI COMMANDS (UPDATED)
     // ==========================================
     
     // Interactive Mode
     if (text === '/ai') {
-        return bot.sendMessage(chatId, "🤖 <b>Gemini AI:</b>\nWhat would you like to ask me? (Reply to this message)", { 
-            parse_mode: 'HTML',
-            reply_markup: { force_reply: true } 
+        return bot.sendMessage(chatId, "What would you like to ask me?", { 
+            reply_markup: { force_reply: true },
+            reply_to_message_id: msg.message_id 
         });
     }
 
@@ -151,29 +144,36 @@ bot.on('message', async (msg) => {
 
         bot.sendChatAction(chatId, 'typing');
         const response = await askGemini(query);
-        return bot.sendMessage(chatId, `🤖 **Gemini:**\n${response}`, { parse_mode: 'Markdown' });
+        
+        // Removed header, added reply tag
+        return bot.sendMessage(chatId, response, { 
+            parse_mode: 'Markdown',
+            reply_to_message_id: msg.message_id 
+        });
     }
 
-    // Reply Context Mode
+    // Reply Context Mode (The FIX is here)
     if (msg.reply_to_message) {
         const self = await bot.getMe();
         if (msg.reply_to_message.from.id === self.id) {
-            const replyText = msg.reply_to_message.text || "";
             
-            // Check if it's an AI message
-            if (replyText.startsWith("🤖")) {
-                const query = text;
-                const previousResponse = replyText.replace(/^🤖 .*?:\s*/, "").trim();
+            // We assume any reply to the bot is a follow-up conversation
+            // (You can add a check for "🤖" if you want to be strict, but this feels more natural)
+            const previousResponse = msg.reply_to_message.text || "";
+            const currentQuery = text;
 
-                bot.sendChatAction(chatId, 'typing');
-                const history = [{ role: "model", parts: [{ text: previousResponse }] }];
-                const response = await askGemini(query, history);
-                
-                return bot.sendMessage(chatId, `🤖 **Gemini:**\n${response}`, { 
-                    parse_mode: 'Markdown',
-                    reply_to_message_id: msg.message_id
-                });
-            }
+            bot.sendChatAction(chatId, 'typing');
+
+            // 🛠️ THE FIX: Inject context into the prompt string instead of the history object
+            // This avoids the "Role must be user" error completely.
+            const fullPrompt = `Context of our conversation:\nAI: ${previousResponse}\n\nUser: ${currentQuery}`;
+
+            const response = await askGemini(fullPrompt);
+            
+            return bot.sendMessage(chatId, response, { 
+                parse_mode: 'Markdown',
+                reply_to_message_id: msg.message_id
+            });
         }
     }
 
@@ -261,4 +261,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 AI BOT RESTARTED (Free Tier Mode).');
+console.log('🤖 BOT ONLINE.');
