@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
 const Groq = require('groq-sdk');
+const Jimp = require('jimp'); // 🖼️ Image Editor for Birthdays
 
 // ==========================================
 // ⚙️ CONFIGURATION
@@ -18,6 +19,7 @@ const TARGET_GROUP_ID = "-1002372844799";
 const BAN_FILE = path.join(__dirname, 'banned.json');
 const EVENT_FILE = path.join(__dirname, 'events.json');
 const MEMORY_FILE = path.join(__dirname, 'memory.json');
+const BDAY_FILE = path.join(__dirname, 'birthdays.json'); // 🎈 Birthdays File
 
 // Initialize Bot
 const bot = new TelegramBot(TOKEN, { 
@@ -44,6 +46,7 @@ const saveData = (file, data) => fs.writeFileSync(file, JSON.stringify(data, nul
 let bannedUsers = loadData(BAN_FILE);
 let calendarEvents = loadData(EVENT_FILE);
 let botMemories = loadData(MEMORY_FILE);
+let birthdays = loadData(BDAY_FILE);
 
 let recentChatHistory = []; 
 function addToHistory(username, text) {
@@ -71,6 +74,76 @@ async function safeReply(chatId, text, replyToId) {
         }
     }
 }
+
+// ==========================================
+// 🎂 BIRTHDAY ENGINE
+// ==========================================
+async function triggerBirthdayCard(chatId, bday) {
+    try {
+        // Fetch User's Profile Picture
+        const profilePhotos = await bot.getUserProfilePhotos(bday.userId, { limit: 1 });
+        let imageBuffer = null;
+        
+        if (profilePhotos.total_count > 0) {
+            const photos = profilePhotos.photos[0];
+            const bestRes = photos[photos.length - 1]; // Get highest resolution
+            const imageUrl = await bot.getFileLink(bestRes.file_id);
+            
+            // Edit Image with Jimp
+            const image = await Jimp.read(imageUrl);
+            const fontWhite = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+            const fontBlack = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+            
+            const textStr = "HAPPY BIRTHDAY";
+            
+            // 1. Print Black Shadow (Offset by 2px) for readability
+            image.print(fontBlack, 2, 2, {
+                text: textStr,
+                alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+                alignmentY: Jimp.VERTICAL_ALIGN_BOTTOM
+            }, image.bitmap.width, image.bitmap.height - 40);
+            
+            // 2. Print White Text
+            image.print(fontWhite, 0, 0, {
+                text: textStr,
+                alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+                alignmentY: Jimp.VERTICAL_ALIGN_BOTTOM
+            }, image.bitmap.width, image.bitmap.height - 42);
+
+            imageBuffer = await image.getBufferAsync(Jimp.MIME_JPEG);
+        }
+
+        // Tag formulation
+        const tag = bday.username ? `@${bday.username}` : `[${bday.name}](tg://user?id=${bday.userId})`;
+        const caption = `🎉 🎂 **HAPPY BIRTHDAY ${tag}!** 🎂 🎉\nHope you have an amazing day!`;
+
+        if (imageBuffer) {
+            await bot.sendPhoto(chatId, imageBuffer, { caption: caption, parse_mode: 'Markdown' });
+        } else {
+            // Fallback if they have no profile picture
+            await bot.sendMessage(chatId, caption, { parse_mode: 'Markdown' });
+        }
+    } catch (e) {
+        console.error("Birthday Error:", e.message);
+    }
+}
+
+async function checkBirthdays() {
+    const today = DateTime.now().setZone('America/New_York').toFormat('MM-dd');
+    for (const bday of birthdays) {
+        if (bday.date === today) {
+            await triggerBirthdayCard(TARGET_GROUP_ID, bday);
+        }
+    }
+}
+
+// Schedule Birthday Checks at 9:00 AM EST every day
+const bdayRule = new schedule.RecurrenceRule();
+bdayRule.hour = 9;
+bdayRule.minute = 0;
+bdayRule.tz = 'America/New_York';
+schedule.scheduleJob(bdayRule, checkBirthdays);
+
 
 // ==========================================
 // 🧠 SMART AI ENGINE
@@ -125,7 +198,7 @@ async function askGroq(userPrompt) {
 }
 
 // ==========================================
-// ⏰ SCHEDULER ENGINE
+// ⏰ SCHEDULER ENGINE (Events)
 // ==========================================
 schedule.scheduleJob('* * * * *', async () => {
     const now = DateTime.now().toMillis();
@@ -181,7 +254,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // 1. EVENT CREATION WIZARD (TEXT INPUT STEPS)
+    // 1. EVENT CREATION WIZARD
     if (eventSetupState[fromId] && eventSetupState[fromId].chatId === chatId) {
         const state = eventSetupState[fromId];
 
@@ -192,10 +265,8 @@ bot.on('message', async (msg) => {
             return bot.sendMessage(chatId, "🚫 Event creation cancelled.", { reply_to_message_id: state.triggerMsgId });
         }
 
-        // STRICT REPLY CHECK
         if (msg.reply_to_message && msg.reply_to_message.message_id === state.lastPromptId) {
             
-            // STEP 1: NAME received -> Move to MONTH
             if (state.step === 'NAME') {
                 state.eventName = text;
                 state.step = 'MONTH';
@@ -222,7 +293,6 @@ bot.on('message', async (msg) => {
                 return;
             }
 
-            // STEP 4: TIME received -> Move to TIME ZONE
             if (state.step === 'TIME') {
                 state.eventTime = text;
                 state.step = 'TIMEZONE';
@@ -248,7 +318,7 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // 2. TRIGGER WIZARD (Cleaned up text)
+    // 2. WIZARD TRIGGER
     if (text === '/newevent') {
         if (!(await isAdmin(chatId, fromId))) return;
         
@@ -269,7 +339,52 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // 3. UPDATE CONTEXT & NORMAL COMMANDS
+    // 3. 🎈 BIRTHDAY COMMANDS
+    if (text.startsWith('/setbday ')) {
+        const dateMatch = text.replace('/setbday ', '').trim();
+        
+        // Ensure format is MM-DD
+        if (!/^\d{2}-\d{2}$/.test(dateMatch)) {
+            return bot.sendMessage(chatId, "⚠️ Use format: `/setbday MM-DD` (e.g., `/setbday 05-24`)", { parse_mode: 'Markdown' });
+        }
+
+        let targetUser = msg.from;
+        if (msg.reply_to_message) {
+            targetUser = msg.reply_to_message.from;
+        }
+
+        // Remove old entry if updating
+        birthdays = birthdays.filter(b => b.userId !== String(targetUser.id));
+        
+        birthdays.push({
+            userId: String(targetUser.id),
+            username: targetUser.username || '',
+            name: targetUser.first_name || 'User',
+            date: dateMatch
+        });
+        saveData(BDAY_FILE, birthdays);
+        
+        return bot.sendMessage(chatId, `🎂 Birthday saved! **${targetUser.first_name}** will be celebrated on **${dateMatch}**.`, { parse_mode: 'Markdown' });
+    }
+
+    if (text === '/bdays') {
+        if (birthdays.length === 0) return bot.sendMessage(chatId, "📅 No birthdays saved yet.");
+        const list = birthdays.sort((a,b) => a.date.localeCompare(b.date)).map(b => `🎂 **${b.name}**: ${b.date}`).join('\n');
+        return bot.sendMessage(chatId, `🎈 **Upcoming Birthdays:**\n\n${list}`, { parse_mode: 'Markdown' });
+    }
+
+    // Test the image generation
+    if (text === '/testbday' && isOwner) {
+        bot.sendMessage(chatId, "⏳ Generating test birthday card...");
+        return triggerBirthdayCard(chatId, {
+            userId: String(msg.from.id),
+            username: msg.from.username,
+            name: msg.from.first_name,
+            date: "TEST"
+        });
+    }
+
+    // 4. UPDATE CONTEXT & AI
     if (!text.startsWith('/')) addToHistory(name, text);
 
     if (text === '/ai') {
@@ -293,7 +408,7 @@ bot.on('message', async (msg) => {
         return safeReply(chatId, response, msg.message_id);
     }
 
-    // MEMORY COMMANDS
+    // 5. MEMORY COMMANDS
     if (text === '/memories' && (await isAdmin(chatId, fromId))) {
         if (botMemories.length === 0) return bot.sendMessage(chatId, "🧠 My mind is empty.");
         const list = botMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
@@ -308,7 +423,7 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // CALENDAR LIST & DELETE
+    // 6. EVENT LIST & DELETE
     if (text === '/events') {
         if (calendarEvents.length === 0) return bot.sendMessage(chatId, "📅 No upcoming events.");
         const list = calendarEvents.sort((a, b) => a.timestamp - b.timestamp)
@@ -326,7 +441,7 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // UTILITY & OWNER
+    // 7. UTILITY & OWNER
     if (isTargetGroup) {
         if (text.startsWith('/when') && msg.reply_to_message) {
             const t = msg.reply_to_message;
@@ -366,8 +481,6 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, `✅ Unbanned: \`${target}\``, { parse_mode: "Markdown" });
             if (isTargetGroup) bot.unbanChatMember(chatId, target, { only_if_banned: true }).catch(() => {});
         }
-        
-        // ⚠️ FIXED: Only extract ID if the forward is happening in a PRIVATE message
         if ((msg.forward_from || msg.forward_from_chat) && msg.chat.type === 'private') {
             let id = msg.forward_from ? msg.forward_from.id : msg.forward_from_chat.id;
             bot.sendMessage(chatId, `🎯 **ID:** \`${id}\``, { parse_mode: "Markdown" });
@@ -423,7 +536,7 @@ bot.on('callback_query', async (query) => {
         return bot.answerCallbackQuery(query.id);
     }
 
-    // STEP 3: DAY received -> Move to TIME (Cleaned up text)
+    // STEP 3: DAY received -> Move to TIME
     if (data.startsWith('DAY_')) {
         state.eventDay = data.replace('DAY_', '');
         state.step = 'TIME';
@@ -485,4 +598,4 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-console.log('🤖 ULTIMATE WIZARD BOT ONLINE.');
+console.log('🤖 BOT ONLINE WITH BIRTHDAYS.');
