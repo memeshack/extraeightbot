@@ -9,7 +9,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ⚙️ CONFIGURATION
 // ==========================================
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
-const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; // ⚠️ PASTE YOUR KEY HERE
+const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; // ⚠️ RE-PASTE YOUR KEY HERE
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
 const TARGET_GROUP_ID = "-1002372844799"; 
@@ -25,9 +25,9 @@ const bot = new TelegramBot(TOKEN, {
     }
 });
 
-// Initialize Gemini (UPDATED TO YOUR AVAILABLE MODEL)
+// Initialize Gemini (USING THE STABLE FREE MODEL)
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -65,7 +65,12 @@ async function askGemini(prompt, chatHistory = []) {
         const result = await chat.sendMessage(prompt);
         return result.response.text();
     } catch (error) {
+        // Log the exact error to console for debugging
         console.error("Gemini API Error:", error.message);
+        
+        if (error.message.includes("429")) {
+            return "⚠️ **Rate Limit:** I'm thinking too fast! Please wait a moment and try again.";
+        }
         return "⚠️ I couldn't reach the AI brain right now.";
     }
 }
@@ -256,4 +261,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 AI BOT RESTARTED (Gemini 2.0).');
+console.log('🤖 AI BOT RESTARTED (Free Tier Mode).');
