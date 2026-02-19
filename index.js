@@ -9,7 +9,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ⚙️ CONFIGURATION
 // ==========================================
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
-const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; 
+const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; // ⚠️ PASTE YOUR KEY HERE
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
 const TARGET_GROUP_ID = "-1002372844799"; 
@@ -25,10 +25,9 @@ const bot = new TelegramBot(TOKEN, {
     }
 });
 
-// Initialize Gemini
-// ⚠️ We use the specific version "-001" to avoid 404 errors
+// Initialize Gemini (UPDATED TO YOUR AVAILABLE MODEL)
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-001" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -67,11 +66,6 @@ async function askGemini(prompt, chatHistory = []) {
         return result.response.text();
     } catch (error) {
         console.error("Gemini API Error:", error.message);
-        
-        // Detailed error for debugging
-        if (error.message.includes("404")) {
-            return "⚠️ **Configuration Error:** The AI model name is invalid. Please run the `check.js` script to find the correct model name for your API key.";
-        }
         return "⚠️ I couldn't reach the AI brain right now.";
     }
 }
@@ -262,4 +256,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 AI BOT RESTARTED.');
+console.log('🤖 AI BOT RESTARTED (Gemini 2.0).');
