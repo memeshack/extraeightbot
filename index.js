@@ -3,16 +3,20 @@ const { DateTime } = require('luxon');
 const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // ==========================================
 // ⚙️ CONFIGURATION
 // ==========================================
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
+const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; // ⚠️ PASTE GEMINI KEY HERE
+
 const OWNER_IDS = ["190190519", "1122603836"]; 
 const TARGET_GROUP_ID = "-1002372844799"; 
 const BAN_FILE = path.join(__dirname, 'banned.json');
 const EVENT_FILE = path.join(__dirname, 'events.json');
 
+// Initialize Telegram Bot
 const bot = new TelegramBot(TOKEN, { 
     polling: {
         interval: 100,
@@ -20,6 +24,10 @@ const bot = new TelegramBot(TOKEN, {
         params: { allowed_updates: ["message", "chat_member", "my_chat_member"] }
     }
 });
+
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-pro"});
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -46,29 +54,42 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
-// ⏰ SCHEDULER ENGINE (PURGE FIX)
+// 🧠 AI ENGINE
+// ==========================================
+async function askGemini(prompt, chatHistory = []) {
+    try {
+        // Construct the chat history for Gemini
+        const chat = model.startChat({
+            history: chatHistory,
+            generationConfig: {
+                maxOutputTokens: 500,
+            },
+        });
+
+        const result = await chat.sendMessage(prompt);
+        return result.response.text();
+    } catch (error) {
+        console.error("Gemini Error:", error);
+        return "⚠️ I couldn't think of a response. (API Error)";
+    }
+}
+
+// ==========================================
+// ⏰ SCHEDULER ENGINE
 // ==========================================
 schedule.scheduleJob('* * * * *', async () => {
     const now = DateTime.now().toMillis();
-    
-    // 1. Separate events into "Due Now" and "Future"
     const dueEvents = calendarEvents.filter(ev => now >= ev.timestamp);
     const futureEvents = calendarEvents.filter(ev => now < ev.timestamp);
 
     if (dueEvents.length > 0) {
         for (const ev of dueEvents) {
             const alert = `🔔 <b>EVENT REMINDER</b>\n━━━━━━━━━━━━━━━━━━\n📝 <b>Event:</b> ${ev.name}\n⏰ <b>Scheduled for:</b> ${ev.dateString}\n━━━━━━━━━━━━━━━━━━\n<i>The event is starting now!</i>`;
-            
             try {
                 const sentMsg = await bot.sendMessage(ev.chatId, alert, { parse_mode: 'HTML' });
                 await bot.pinChatMessage(ev.chatId, sentMsg.message_id, { disable_notification: true });
-                console.log(`[CALENDAR] Reminder sent/pinned/purged for: ${ev.name}`);
-            } catch (e) {
-                console.log(`Error sending reminder: ${e.message}`);
-            }
+            } catch (e) {}
         }
-
-        // 2. Immediately overwrite database with ONLY future events
         calendarEvents = futureEvents;
         saveData(EVENT_FILE, calendarEvents);
     }
@@ -98,24 +119,73 @@ bot.on('message', async (msg) => {
     const fromId = String(msg.from.id);
     const text = msg.text;
 
-    // --- GLOBAL LOCKDOWN ---
-    // If it's not the target group AND not an owner in DMs, ignore everything.
     const isTargetGroup = (chatId === TARGET_GROUP_ID);
     const isOwner = OWNER_IDS.includes(fromId);
 
+    // Lockdown Check
     if (!isTargetGroup && !isOwner) return;
 
-    // 1. AUTO-BAN (Target Group Only)
+    // 1. AUTO-BAN
     if (isTargetGroup && bannedUsers.includes(fromId)) {
         bot.deleteMessage(chatId, msg.message_id).catch(() => {});
         bot.banChatMember(chatId, fromId).catch(() => {});
         return;
     }
 
-    // 2. CALENDAR COMMANDS (Admins/Owners Only)
+    // ==========================================
+    // 🤖 AI COMMANDS (/ai)
+    // ==========================================
+    
+    // CASE 1: User types "/ai" (Empty)
+    if (text === '/ai') {
+        return bot.sendMessage(chatId, "🤖 <b>Gemini AI:</b>\nWhat would you like to ask me? (Reply to this message)", { 
+            parse_mode: 'HTML',
+            reply_markup: { force_reply: true } // This forces the client to reply
+        });
+    }
+
+    // CASE 2: User types "/ai {query}"
+    if (text.startsWith('/ai ')) {
+        const query = text.replace('/ai ', '').trim();
+        if (!query) return;
+
+        // Send a "Typing..." action so user knows it's thinking
+        bot.sendChatAction(chatId, 'typing');
+        
+        const response = await askGemini(query);
+        return bot.sendMessage(chatId, `🤖 <b>Gemini:</b>\n${response}`, { parse_mode: 'HTML' });
+    }
+
+    // CASE 3: User REPLIES to the AI (Context Awareness)
+    // We check if the message being replied to was sent by the Bot AND starts with "🤖"
+    if (msg.reply_to_message && msg.reply_to_message.from.id === (await bot.getMe()).id) {
+        const replyText = msg.reply_to_message.text || "";
+        
+        // Only trigger if the previous message was actually from Gemini
+        if (replyText.startsWith("🤖")) {
+            const query = text;
+            const previousAiResponse = replyText.replace("🤖 Gemini:", "").trim();
+
+            bot.sendChatAction(chatId, 'typing');
+
+            // We create a mini-history for Gemini so it understands context
+            const history = [
+                { role: "model", parts: [{ text: previousAiResponse }] },
+            ];
+
+            const response = await askGemini(query, history);
+            return bot.sendMessage(chatId, `🤖 <b>Gemini:</b>\n${response}`, { 
+                parse_mode: 'HTML',
+                reply_to_message_id: msg.message_id
+            });
+        }
+    }
+
+    // ==========================================
+    // 🗓️ CALENDAR COMMANDS (Admins/Owners)
+    // ==========================================
     if (text.startsWith('/event ')) {
         if (!(await isAdmin(chatId, fromId))) return;
-
         const parts = text.replace('/event ', '').split('@');
         if (parts.length < 2) return bot.sendMessage(chatId, "⚠️ Usage: <code>/event Name @ February 20, 2026 at 4:00PM</code>", { parse_mode: 'HTML' });
         
@@ -140,37 +210,15 @@ bot.on('message', async (msg) => {
         if (!(await isAdmin(chatId, fromId))) return;
         const index = parseInt(text.split(' ')[1]) - 1;
         if (calendarEvents[index]) {
-            const removed = calendarEvents.splice(index, 1);
+            calendarEvents.splice(index, 1);
             saveData(EVENT_FILE, calendarEvents);
-            bot.sendMessage(chatId, `🗑️ Deleted: <b>${removed[0].name}</b>`, { parse_mode: 'HTML' });
+            bot.sendMessage(chatId, `🗑️ Event deleted.`, { parse_mode: 'HTML' });
         }
     }
 
-    // 3. OWNER-ONLY COMMANDS (Work everywhere for you)
-    if (isOwner) {
-        if (text.startsWith("/permban ")) {
-            const target = text.split(" ")[1];
-            if (!bannedUsers.includes(target)) {
-                bannedUsers.push(target);
-                saveData(BAN_FILE, bannedUsers);
-                bot.sendMessage(chatId, `✅ Banned: \`${target}\``, { parse_mode: "Markdown" });
-                if (isTargetGroup) bot.banChatMember(chatId, target).catch(() => {});
-            }
-        }
-        if (text.startsWith("/unpermban ")) {
-            const target = text.split(" ")[1];
-            bannedUsers = bannedUsers.filter(id => id !== target);
-            saveData(BAN_FILE, bannedUsers);
-            bot.sendMessage(chatId, `✅ Unbanned: \`${target}\``, { parse_mode: "Markdown" });
-            if (isTargetGroup) bot.unbanChatMember(chatId, target, { only_if_banned: true }).catch(() => {});
-        }
-        if (msg.forward_from || msg.forward_from_chat) {
-            let id = msg.forward_from ? msg.forward_from.id : msg.forward_from_chat.id;
-            bot.sendMessage(chatId, `🎯 **ID:** \`${id}\``, { parse_mode: "Markdown" });
-        }
-    }
-
-    // 4. UTILITY COMMANDS (Target Group Only)
+    // ==========================================
+    // 🛠️ UTILITY COMMANDS (Target Group)
+    // ==========================================
     if (isTargetGroup) {
         // /when
         if (text.startsWith('/when') && msg.reply_to_message) {
@@ -194,6 +242,32 @@ bot.on('message', async (msg) => {
             }
         }
     }
+
+    // ==========================================
+    // 👑 OWNER COMMANDS
+    // ==========================================
+    if (isOwner) {
+        if (text.startsWith("/permban ")) {
+            const target = text.split(" ")[1];
+            if (!bannedUsers.includes(target)) {
+                bannedUsers.push(target);
+                saveData(BAN_FILE, bannedUsers);
+                bot.sendMessage(chatId, `✅ Banned: \`${target}\``, { parse_mode: "Markdown" });
+                if (isTargetGroup) bot.banChatMember(chatId, target).catch(() => {});
+            }
+        }
+        if (text.startsWith("/unpermban ")) {
+            const target = text.split(" ")[1];
+            bannedUsers = bannedUsers.filter(id => id !== target);
+            saveData(BAN_FILE, bannedUsers);
+            bot.sendMessage(chatId, `✅ Unbanned: \`${target}\``, { parse_mode: "Markdown" });
+            if (isTargetGroup) bot.unbanChatMember(chatId, target, { only_if_banned: true }).catch(() => {});
+        }
+        if (msg.forward_from || msg.forward_from_chat) {
+            let id = msg.forward_from ? msg.forward_from.id : msg.forward_from_chat.id;
+            bot.sendMessage(chatId, `🎯 **ID:** \`${id}\``, { parse_mode: "Markdown" });
+        }
+    }
 });
 
-console.log('🤖 LOCKDOWN BOT ACTIVE.');
+console.log('🤖 AI BOT ACTIVE.');
