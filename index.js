@@ -44,16 +44,15 @@ let bannedUsers = loadData(BAN_FILE);
 let calendarEvents = loadData(EVENT_FILE);
 let botMemories = loadData(MEMORY_FILE);
 
-// 🧠 SHORT-TERM CONTEXT BUFFER (Last 10 messages)
+// 🧠 SHORT-TERM CONTEXT BUFFER
 let recentChatHistory = []; 
 
 function addToHistory(username, text) {
     const entry = `${username}: ${text}`;
     recentChatHistory.push(entry);
-    if (recentChatHistory.length > 15) recentChatHistory.shift(); // Keep last 15
+    if (recentChatHistory.length > 15) recentChatHistory.shift(); 
 }
 
-// Helper: Check Admin
 async function isAdmin(chatId, userId) {
     if (OWNER_IDS.includes(String(userId))) return true;
     try {
@@ -63,34 +62,26 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
-// 🧠 SMART AI ENGINE (WITH AUTO-MEMORY)
+// 🧠 SMART AI ENGINE
 // ==========================================
 async function askGroq(userPrompt, chatId) {
     try {
         // 1. Build the "Brain"
-        const memoryList = botMemories.length > 0 
-            ? botMemories.join("\n") 
-            : "No specific long-term memories yet.";
-        
+        const memoryList = botMemories.length > 0 ? botMemories.join("\n") : "No specific memories yet.";
         const contextList = recentChatHistory.join("\n");
 
         const systemMessage = `
-        You are a helpful, casual Telegram group assistant.
+        You are a helpful Telegram group assistant.
         
-        🧠 LONG-TERM MEMORIES (Facts you know):
+        🧠 MEMORIES:
         ${memoryList}
 
-        💬 RECENT CHAT CONTEXT (What just happened):
+        💬 RECENT CHAT:
         ${contextList}
 
         🔴 INSTRUCTIONS:
-        1. Answer the user's question naturally based on the memories and context.
-        2. **CRITICAL:** If the user tells you a NEW fact that is worth remembering (like a name, location, preference, or rule), you must output a special tag at the very end of your message.
-        3. Format for saving memory: "SAVE_MEM: <the fact>"
-        
-        Example:
-        User: "My name is Rob."
-        You: "Nice to meet you, Rob! SAVE_MEM: User's name is Rob."
+        1. Answer naturally.
+        2. If the user shares a NEW fact (name, rule, preference), output "SAVE_MEM: <fact>" at the end.
         `;
 
         // 2. Send to Groq
@@ -106,24 +97,18 @@ async function askGroq(userPrompt, chatId) {
 
         let response = chatCompletion.choices[0]?.message?.content || "⚠️ Empty response.";
 
-        // 3. 🕵️ SECRET EXTRACTION STEP
-        // Check if the AI wants to save a memory
+        // 3. Extract Memories
         if (response.includes("SAVE_MEM:")) {
             const parts = response.split("SAVE_MEM:");
             const cleanResponse = parts[0].trim();
             const memoryToSave = parts[1].trim();
 
-            // Save it!
             if (memoryToSave && !botMemories.includes(memoryToSave)) {
                 botMemories.push(memoryToSave);
                 saveData(MEMORY_FILE, botMemories);
                 console.log(`🧠 AUTO-LEARNED: ${memoryToSave}`);
-                
-                // Optional: Notify user (or keep it silent magic)
-                // bot.sendMessage(chatId, "🧠 *Memory stored.*", { parse_mode: 'Markdown' });
             }
-
-            return cleanResponse; // Send back only the text, hide the SAVE_MEM tag
+            return cleanResponse;
         }
 
         return response;
@@ -192,8 +177,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // 1. 🧠 UPDATE CONTEXT BUFFER (The "Short-Term Memory")
-    // We record every message so the AI knows what happened recently
+    // 1. UPDATE CONTEXT
     addToHistory(name, text);
 
     // ==========================================
@@ -216,8 +200,8 @@ bot.on('message', async (msg) => {
         bot.sendChatAction(chatId, 'typing');
         const response = await askGroq(query, chatId);
         
+        // ⚠️ REMOVED PARSE_MODE TO PREVENT CRASHES
         return bot.sendMessage(chatId, response, { 
-            parse_mode: 'Markdown',
             reply_to_message_id: msg.message_id 
         });
     }
@@ -227,23 +211,19 @@ bot.on('message', async (msg) => {
         const self = await bot.getMe();
         if (msg.reply_to_message.from.id === self.id) {
             
-            // Just pass the text to Groq. 
-            // NOTE: We don't need to manually inject context anymore because 
-            // "recentChatHistory" is already being sent to askGroq()!
             bot.sendChatAction(chatId, 'typing');
             const response = await askGroq(text, chatId);
             
+            // ⚠️ REMOVED PARSE_MODE TO PREVENT CRASHES
             return bot.sendMessage(chatId, response, { 
-                parse_mode: 'Markdown',
                 reply_to_message_id: msg.message_id
             });
         }
     }
 
     // ==========================================
-    // 🧠 MEMORY MANAGEMENT (Manual Override)
+    // 🧠 MEMORY MANAGEMENT (Manual)
     // ==========================================
-    // Just in case you want to see what it knows
     if (text === '/memories' && (await isAdmin(chatId, fromId))) {
         if (botMemories.length === 0) return bot.sendMessage(chatId, "🧠 My mind is empty.");
         const list = botMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
@@ -260,7 +240,7 @@ bot.on('message', async (msg) => {
     }
 
     // ==========================================
-    // 🗓️ CALENDAR (Admins)
+    // 🗓️ CALENDAR
     // ==========================================
     if (text.startsWith('/event ')) {
         if (!(await isAdmin(chatId, fromId))) return;
@@ -343,4 +323,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 BOT WITH AUTOMATIC MEMORY ONLINE.');
+console.log('🤖 BOT ONLINE.');
