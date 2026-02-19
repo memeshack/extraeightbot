@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
 const Groq = require('groq-sdk');
-const Jimp = require('jimp'); // 🖼️ Image Editor for Birthdays
+// ⚠️ MUST USE JIMP v0.22.10 (npm install jimp@0.22.10)
+const Jimp = require('jimp'); 
 
 // ==========================================
 // ⚙️ CONFIGURATION
@@ -19,7 +20,7 @@ const TARGET_GROUP_ID = "-1002372844799";
 const BAN_FILE = path.join(__dirname, 'banned.json');
 const EVENT_FILE = path.join(__dirname, 'events.json');
 const MEMORY_FILE = path.join(__dirname, 'memory.json');
-const BDAY_FILE = path.join(__dirname, 'birthdays.json'); // 🎈 Birthdays File
+const BDAY_FILE = path.join(__dirname, 'birthdays.json');
 
 // Initialize Bot
 const bot = new TelegramBot(TOKEN, { 
@@ -76,34 +77,48 @@ async function safeReply(chatId, text, replyToId) {
 }
 
 // ==========================================
-// 🎂 BIRTHDAY ENGINE
+// 🎂 BIRTHDAY ENGINE (With Confetti!)
 // ==========================================
 async function triggerBirthdayCard(chatId, bday) {
     try {
-        // Fetch User's Profile Picture
         const profilePhotos = await bot.getUserProfilePhotos(bday.userId, { limit: 1 });
         let imageBuffer = null;
         
         if (profilePhotos.total_count > 0) {
             const photos = profilePhotos.photos[0];
-            const bestRes = photos[photos.length - 1]; // Get highest resolution
+            const bestRes = photos[photos.length - 1];
             const imageUrl = await bot.getFileLink(bestRes.file_id);
             
-            // Edit Image with Jimp
+            // 1. Load User's Profile Picture
             const image = await Jimp.read(imageUrl);
+
+            // 2. Load and Overlay Confetti (if file exists)
+            const confettiPath = path.join(__dirname, 'confetti.png');
+            if (fs.existsSync(confettiPath)) {
+                try {
+                    const confetti = await Jimp.read(confettiPath);
+                    // Resize confetti to match the PFP size exactly
+                    confetti.resize(image.bitmap.width, image.bitmap.height);
+                    // Layer confetti on top starting at top-left corner (0,0)
+                    image.composite(confetti, 0, 0);
+                } catch (err) {
+                    console.error("Error adding confetti overlay:", err);
+                }
+            }
+
+            // 3. Add Text
             const fontWhite = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
             const fontBlack = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-            
             const textStr = "HAPPY BIRTHDAY";
             
-            // 1. Print Black Shadow (Offset by 2px) for readability
+            // Black shadow
             image.print(fontBlack, 2, 2, {
                 text: textStr,
                 alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
                 alignmentY: Jimp.VERTICAL_ALIGN_BOTTOM
             }, image.bitmap.width, image.bitmap.height - 40);
             
-            // 2. Print White Text
+            // White text
             image.print(fontWhite, 0, 0, {
                 text: textStr,
                 alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
@@ -115,12 +130,13 @@ async function triggerBirthdayCard(chatId, bday) {
 
         // Tag formulation
         const tag = bday.username ? `@${bday.username}` : `[${bday.name}](tg://user?id=${bday.userId})`;
-        const caption = `🎉 🎂 **HAPPY BIRTHDAY ${tag}!** 🎂 🎉\nHope you have an amazing day!`;
+        // ⚠️ UPDATED CAPTION (Removed extra text)
+        const caption = `🎉 🎂 **HAPPY BIRTHDAY ${tag}!** 🎂 🎉`;
 
         if (imageBuffer) {
             await bot.sendPhoto(chatId, imageBuffer, { caption: caption, parse_mode: 'Markdown' });
         } else {
-            // Fallback if they have no profile picture
+            // Fallback if no PFP
             await bot.sendMessage(chatId, caption, { parse_mode: 'Markdown' });
         }
     } catch (e) {
@@ -598,4 +614,4 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-console.log('🤖 BOT ONLINE WITH BIRTHDAYS.');
+console.log('🤖 BOT ONLINE WITH BIRTHDAYS & CONFETTI.');
