@@ -26,9 +26,9 @@ const bot = new TelegramBot(TOKEN, {
 });
 
 // Initialize Gemini
-// ⚠️ IF "gemini-1.5-flash-latest" FAILS, CHANGE IT TO "gemini-1.0-pro"
+// ⚠️ We use the specific version "-001" to avoid 404 errors
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-001" });
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -66,9 +66,13 @@ async function askGemini(prompt, chatHistory = []) {
         const result = await chat.sendMessage(prompt);
         return result.response.text();
     } catch (error) {
-        console.error("Gemini Error:", error.message);
-        // Fallback message if AI crashes
-        return "⚠️ I couldn't reach the AI brain right now. Please check the API Key or Model Name.";
+        console.error("Gemini API Error:", error.message);
+        
+        // Detailed error for debugging
+        if (error.message.includes("404")) {
+            return "⚠️ **Configuration Error:** The AI model name is invalid. Please run the `check.js` script to find the correct model name for your API key.";
+        }
+        return "⚠️ I couldn't reach the AI brain right now.";
     }
 }
 
@@ -156,6 +160,8 @@ bot.on('message', async (msg) => {
         const self = await bot.getMe();
         if (msg.reply_to_message.from.id === self.id) {
             const replyText = msg.reply_to_message.text || "";
+            
+            // Check if it's an AI message
             if (replyText.startsWith("🤖")) {
                 const query = text;
                 const previousResponse = replyText.replace(/^🤖 .*?:\s*/, "").trim();
