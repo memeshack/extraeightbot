@@ -8,7 +8,6 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ==========================================
 // ⚙️ CONFIGURATION
 // ==========================================
-// ⚠️ PASTE YOUR TOKENS HERE
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
 const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; 
 
@@ -26,9 +25,10 @@ const bot = new TelegramBot(TOKEN, {
     }
 });
 
-// Initialize Gemini (UPDATED MODEL NAME HERE)
+// Initialize Gemini
+// ⚠️ IF "gemini-1.5-flash-latest" FAILS, CHANGE IT TO "gemini-1.0-pro"
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -67,7 +67,8 @@ async function askGemini(prompt, chatHistory = []) {
         return result.response.text();
     } catch (error) {
         console.error("Gemini Error:", error.message);
-        return "⚠️ I couldn't process that. (AI Error)";
+        // Fallback message if AI crashes
+        return "⚠️ I couldn't reach the AI brain right now. Please check the API Key or Model Name.";
     }
 }
 
@@ -119,7 +120,6 @@ bot.on('message', async (msg) => {
     const isTargetGroup = (chatId === TARGET_GROUP_ID);
     const isOwner = OWNER_IDS.includes(fromId);
 
-    // Lockdown Check
     if (!isTargetGroup && !isOwner) return;
 
     // 1. AUTO-BAN
@@ -133,7 +133,7 @@ bot.on('message', async (msg) => {
     // 🤖 AI COMMANDS
     // ==========================================
     
-    // 1. Interactive Mode: /ai
+    // Interactive Mode
     if (text === '/ai') {
         return bot.sendMessage(chatId, "🤖 <b>Gemini AI:</b>\nWhat would you like to ask me? (Reply to this message)", { 
             parse_mode: 'HTML',
@@ -141,40 +141,29 @@ bot.on('message', async (msg) => {
         });
     }
 
-    // 2. Direct Mode: /ai query
+    // Direct Mode
     if (text.startsWith('/ai ')) {
         const query = text.replace('/ai ', '').trim();
         if (!query) return;
 
         bot.sendChatAction(chatId, 'typing');
         const response = await askGemini(query);
-        
-        // We use Markdown for AI because it might send code blocks
         return bot.sendMessage(chatId, `🤖 **Gemini:**\n${response}`, { parse_mode: 'Markdown' });
     }
 
-    // 3. Reply Context Mode
-    // Check if user is replying to a message from THIS bot
+    // Reply Context Mode
     if (msg.reply_to_message) {
         const self = await bot.getMe();
         if (msg.reply_to_message.from.id === self.id) {
-            
             const replyText = msg.reply_to_message.text || "";
-            
-            // If the message replied to starts with the Robot emoji, we know it's AI history
             if (replyText.startsWith("🤖")) {
                 const query = text;
-                // Remove the "🤖 Gemini:" branding to get raw history
                 const previousResponse = replyText.replace(/^🤖 .*?:\s*/, "").trim();
 
                 bot.sendChatAction(chatId, 'typing');
-
-                // Build history for context
-                const history = [
-                    { role: "model", parts: [{ text: previousResponse }] },
-                ];
-
+                const history = [{ role: "model", parts: [{ text: previousResponse }] }];
                 const response = await askGemini(query, history);
+                
                 return bot.sendMessage(chatId, `🤖 **Gemini:**\n${response}`, { 
                     parse_mode: 'Markdown',
                     reply_to_message_id: msg.message_id
@@ -184,7 +173,7 @@ bot.on('message', async (msg) => {
     }
 
     // ==========================================
-    // 🗓️ CALENDAR (Admin/Owner)
+    // 🗓️ CALENDAR
     // ==========================================
     if (text.startsWith('/event ')) {
         if (!(await isAdmin(chatId, fromId))) return;
@@ -267,4 +256,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 AI BOT ACTIVE.');
+console.log('🤖 AI BOT RESTARTED.');
