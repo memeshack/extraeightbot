@@ -278,6 +278,39 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // 0. ADMIN HELP MENU
+    if (text === '/help') {
+        if (!(await isAdmin(chatId, fromId))) return;
+
+        const helpMenu = `
+🛠️ **Admin Command List**
+
+🤖 **AI Controls**
+\`/ai\` - Start an AI chat
+\`/ai [query]\` - Ask the AI directly
+*(Reply to AI messages to continue a conversation)*
+
+📅 **Events & Calendar**
+\`/newevent\` - Start the event creation wizard
+\`/events\` - View all upcoming events
+\`/delevent [number]\` - Delete an event
+
+🎈 **Birthdays**
+\`/setbday MM-DD\` - Set a birthday (reply to a user to set theirs)
+\`/bdays\` - View all saved birthdays
+\`/testbday\` - Generate a test birthday card for yourself
+
+🧠 **Memory Management**
+\`/memories\` - View all facts the AI learned
+\`/forget [number]\` - Delete a specific memory
+
+⏳ **Utility**
+\`/when\` - Reply to any message to see exactly how old it is
+        `;
+
+        return bot.sendMessage(chatId, helpMenu, { parse_mode: 'Markdown' });
+    }
+
     // 1. EVENT CREATION WIZARD
     if (eventSetupState[fromId] && eventSetupState[fromId].chatId === chatId) {
         const state = eventSetupState[fromId];
