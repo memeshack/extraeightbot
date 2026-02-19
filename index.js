@@ -8,15 +8,16 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ==========================================
 // ⚙️ CONFIGURATION
 // ==========================================
+// ⚠️ PASTE YOUR TOKENS HERE
 const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A'; 
-const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; // ⚠️ PASTE GEMINI KEY HERE
+const GEMINI_KEY = 'AIzaSyBp65W8x8iHx2CpKSTLUJXikjoT_LQOhss'; 
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
 const TARGET_GROUP_ID = "-1002372844799"; 
 const BAN_FILE = path.join(__dirname, 'banned.json');
 const EVENT_FILE = path.join(__dirname, 'events.json');
 
-// Initialize Telegram Bot
+// Initialize Bot
 const bot = new TelegramBot(TOKEN, { 
     polling: {
         interval: 100,
@@ -25,9 +26,9 @@ const bot = new TelegramBot(TOKEN, {
     }
 });
 
-// Initialize Gemini AI
+// Initialize Gemini (UPDATED MODEL NAME HERE)
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro"});
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // ==========================================
 // 💾 DATABASE HELPERS
@@ -44,7 +45,7 @@ const saveData = (file, data) => fs.writeFileSync(file, JSON.stringify(data, nul
 let bannedUsers = loadData(BAN_FILE);
 let calendarEvents = loadData(EVENT_FILE);
 
-// Helper to check if a user is an Admin or Owner
+// Helper: Check Admin
 async function isAdmin(chatId, userId) {
     if (OWNER_IDS.includes(String(userId))) return true;
     try {
@@ -58,19 +59,15 @@ async function isAdmin(chatId, userId) {
 // ==========================================
 async function askGemini(prompt, chatHistory = []) {
     try {
-        // Construct the chat history for Gemini
         const chat = model.startChat({
             history: chatHistory,
-            generationConfig: {
-                maxOutputTokens: 500,
-            },
         });
 
         const result = await chat.sendMessage(prompt);
         return result.response.text();
     } catch (error) {
-        console.error("Gemini Error:", error);
-        return "⚠️ I couldn't think of a response. (API Error)";
+        console.error("Gemini Error:", error.message);
+        return "⚠️ I couldn't process that. (AI Error)";
     }
 }
 
@@ -96,7 +93,7 @@ schedule.scheduleJob('* * * * *', async () => {
 });
 
 // ==========================================
-// 🛡️ SECURITY: INSTANT BAN (On Join)
+// 🛡️ SECURITY: INSTANT BAN
 // ==========================================
 bot.on('chat_member', (event) => {
     const chatId = String(event.chat.id);
@@ -133,56 +130,61 @@ bot.on('message', async (msg) => {
     }
 
     // ==========================================
-    // 🤖 AI COMMANDS (/ai)
+    // 🤖 AI COMMANDS
     // ==========================================
     
-    // CASE 1: User types "/ai" (Empty)
+    // 1. Interactive Mode: /ai
     if (text === '/ai') {
         return bot.sendMessage(chatId, "🤖 <b>Gemini AI:</b>\nWhat would you like to ask me? (Reply to this message)", { 
             parse_mode: 'HTML',
-            reply_markup: { force_reply: true } // This forces the client to reply
+            reply_markup: { force_reply: true } 
         });
     }
 
-    // CASE 2: User types "/ai {query}"
+    // 2. Direct Mode: /ai query
     if (text.startsWith('/ai ')) {
         const query = text.replace('/ai ', '').trim();
         if (!query) return;
 
-        // Send a "Typing..." action so user knows it's thinking
         bot.sendChatAction(chatId, 'typing');
-        
         const response = await askGemini(query);
-        return bot.sendMessage(chatId, `🤖 <b>Gemini:</b>\n${response}`, { parse_mode: 'HTML' });
+        
+        // We use Markdown for AI because it might send code blocks
+        return bot.sendMessage(chatId, `🤖 **Gemini:**\n${response}`, { parse_mode: 'Markdown' });
     }
 
-    // CASE 3: User REPLIES to the AI (Context Awareness)
-    // We check if the message being replied to was sent by the Bot AND starts with "🤖"
-    if (msg.reply_to_message && msg.reply_to_message.from.id === (await bot.getMe()).id) {
-        const replyText = msg.reply_to_message.text || "";
-        
-        // Only trigger if the previous message was actually from Gemini
-        if (replyText.startsWith("🤖")) {
-            const query = text;
-            const previousAiResponse = replyText.replace("🤖 Gemini:", "").trim();
+    // 3. Reply Context Mode
+    // Check if user is replying to a message from THIS bot
+    if (msg.reply_to_message) {
+        const self = await bot.getMe();
+        if (msg.reply_to_message.from.id === self.id) {
+            
+            const replyText = msg.reply_to_message.text || "";
+            
+            // If the message replied to starts with the Robot emoji, we know it's AI history
+            if (replyText.startsWith("🤖")) {
+                const query = text;
+                // Remove the "🤖 Gemini:" branding to get raw history
+                const previousResponse = replyText.replace(/^🤖 .*?:\s*/, "").trim();
 
-            bot.sendChatAction(chatId, 'typing');
+                bot.sendChatAction(chatId, 'typing');
 
-            // We create a mini-history for Gemini so it understands context
-            const history = [
-                { role: "model", parts: [{ text: previousAiResponse }] },
-            ];
+                // Build history for context
+                const history = [
+                    { role: "model", parts: [{ text: previousResponse }] },
+                ];
 
-            const response = await askGemini(query, history);
-            return bot.sendMessage(chatId, `🤖 <b>Gemini:</b>\n${response}`, { 
-                parse_mode: 'HTML',
-                reply_to_message_id: msg.message_id
-            });
+                const response = await askGemini(query, history);
+                return bot.sendMessage(chatId, `🤖 **Gemini:**\n${response}`, { 
+                    parse_mode: 'Markdown',
+                    reply_to_message_id: msg.message_id
+                });
+            }
         }
     }
 
     // ==========================================
-    // 🗓️ CALENDAR COMMANDS (Admins/Owners)
+    // 🗓️ CALENDAR (Admin/Owner)
     // ==========================================
     if (text.startsWith('/event ')) {
         if (!(await isAdmin(chatId, fromId))) return;
@@ -217,10 +219,9 @@ bot.on('message', async (msg) => {
     }
 
     // ==========================================
-    // 🛠️ UTILITY COMMANDS (Target Group)
+    // 🛠️ UTILITY & OWNER
     // ==========================================
     if (isTargetGroup) {
-        // /when
         if (text.startsWith('/when') && msg.reply_to_message) {
             const t = msg.reply_to_message;
             const diff = DateTime.now().diff(DateTime.fromSeconds(t.forward_date || t.date), ['years', 'months', 'days', 'hours', 'minutes', 'seconds']).toObject();
@@ -230,7 +231,6 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, `⏳ <b>This message is:</b>\n${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')} old`, { parse_mode: 'HTML', reply_to_message_id: t.message_id });
         }
 
-        // Regex s/
         if (text.startsWith('s/') && msg.reply_to_message) {
             const orig = msg.reply_to_message.text || msg.reply_to_message.caption;
             const p = text.slice(2).split('/');
@@ -243,9 +243,6 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // ==========================================
-    // 👑 OWNER COMMANDS
-    // ==========================================
     if (isOwner) {
         if (text.startsWith("/permban ")) {
             const target = text.split(" ")[1];
