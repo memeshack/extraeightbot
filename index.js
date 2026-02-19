@@ -12,7 +12,9 @@ const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A';
 const GROQ_API_KEY = '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'; // ⚠️ PASTE KEY HERE
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
+const LOG_ID = "190190519"; // 🧠 WHERE TO SEND MEMORY LOGS
 const TARGET_GROUP_ID = "-1002372844799"; 
+
 const BAN_FILE = path.join(__dirname, 'banned.json');
 const EVENT_FILE = path.join(__dirname, 'events.json');
 const MEMORY_FILE = path.join(__dirname, 'memory.json');
@@ -64,7 +66,7 @@ async function isAdmin(chatId, userId) {
 // ==========================================
 // 🧠 SMART AI ENGINE
 // ==========================================
-async function askGroq(userPrompt, chatId) {
+async function askGroq(userPrompt) {
     try {
         // 1. Build the "Brain"
         const memoryList = botMemories.length > 0 ? botMemories.join("\n") : "No specific memories yet.";
@@ -104,9 +106,13 @@ async function askGroq(userPrompt, chatId) {
             const memoryToSave = parts[1].trim();
 
             if (memoryToSave && !botMemories.includes(memoryToSave)) {
+                // Save to file
                 botMemories.push(memoryToSave);
                 saveData(MEMORY_FILE, botMemories);
                 console.log(`🧠 AUTO-LEARNED: ${memoryToSave}`);
+
+                // 📨 SEND LOG TO OWNER
+                bot.sendMessage(LOG_ID, `🧠 **I Learned Something New!**\n\n${memoryToSave}`);
             }
             return cleanResponse;
         }
@@ -198,9 +204,9 @@ bot.on('message', async (msg) => {
         if (!query) return;
 
         bot.sendChatAction(chatId, 'typing');
-        const response = await askGroq(query, chatId);
+        const response = await askGroq(query);
         
-        // ⚠️ REMOVED PARSE_MODE TO PREVENT CRASHES
+        // ⚠️ NO PARSE MODE (Prevents Crashes)
         return bot.sendMessage(chatId, response, { 
             reply_to_message_id: msg.message_id 
         });
@@ -212,9 +218,9 @@ bot.on('message', async (msg) => {
         if (msg.reply_to_message.from.id === self.id) {
             
             bot.sendChatAction(chatId, 'typing');
-            const response = await askGroq(text, chatId);
+            const response = await askGroq(text);
             
-            // ⚠️ REMOVED PARSE_MODE TO PREVENT CRASHES
+            // ⚠️ NO PARSE MODE (Prevents Crashes)
             return bot.sendMessage(chatId, response, { 
                 reply_to_message_id: msg.message_id
             });
