@@ -12,7 +12,7 @@ const TOKEN = '8184622311:AAGjxKL6mu0XPo9KEkq3XS-6yGbajLuGN2A';
 const GROQ_API_KEY = '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'; // ⚠️ PASTE KEY HERE
 
 const OWNER_IDS = ["190190519", "1122603836"]; 
-const LOG_ID = "190190519"; // 🧠 WHERE TO SEND MEMORY LOGS
+const LOG_ID = "190190519"; 
 const TARGET_GROUP_ID = "-1002372844799"; 
 
 const BAN_FILE = path.join(__dirname, 'banned.json');
@@ -64,11 +64,27 @@ async function isAdmin(chatId, userId) {
 }
 
 // ==========================================
+// 🛡️ HELPER: SAFE REPLY
+// ==========================================
+// This stops the bot from crashing if a user deletes their message
+async function safeReply(chatId, text, replyToId) {
+    try {
+        await bot.sendMessage(chatId, text, { reply_to_message_id: replyToId });
+    } catch (error) {
+        // If reply fails (message deleted), send normally
+        if (error.response && error.response.statusCode === 400) {
+            await bot.sendMessage(chatId, text);
+        } else {
+            console.error("Msg Error:", error.message);
+        }
+    }
+}
+
+// ==========================================
 // 🧠 SMART AI ENGINE
 // ==========================================
 async function askGroq(userPrompt) {
     try {
-        // 1. Build the "Brain"
         const memoryList = botMemories.length > 0 ? botMemories.join("\n") : "No specific memories yet.";
         const contextList = recentChatHistory.join("\n");
 
@@ -86,7 +102,6 @@ async function askGroq(userPrompt) {
         2. If the user shares a NEW fact (name, rule, preference), output "SAVE_MEM: <fact>" at the end.
         `;
 
-        // 2. Send to Groq
         const chatCompletion = await groq.chat.completions.create({
             messages: [
                 { role: "system", content: systemMessage },
@@ -106,13 +121,12 @@ async function askGroq(userPrompt) {
             const memoryToSave = parts[1].trim();
 
             if (memoryToSave && !botMemories.includes(memoryToSave)) {
-                // Save to file
                 botMemories.push(memoryToSave);
                 saveData(MEMORY_FILE, botMemories);
                 console.log(`🧠 AUTO-LEARNED: ${memoryToSave}`);
-
-                // 📨 SEND LOG TO OWNER
-                bot.sendMessage(LOG_ID, `🧠 **I Learned Something New!**\n\n${memoryToSave}`);
+                
+                // 📨 LOG TO OWNER
+                bot.sendMessage(LOG_ID, `🧠 **I Learned Something New!**\n\n${memoryToSave}`, { parse_mode: 'Markdown' }).catch(() => {});
             }
             return cleanResponse;
         }
@@ -206,10 +220,7 @@ bot.on('message', async (msg) => {
         bot.sendChatAction(chatId, 'typing');
         const response = await askGroq(query);
         
-        // ⚠️ NO PARSE MODE (Prevents Crashes)
-        return bot.sendMessage(chatId, response, { 
-            reply_to_message_id: msg.message_id 
-        });
+        return safeReply(chatId, response, msg.message_id);
     }
 
     // Natural Reply Mode
@@ -220,10 +231,7 @@ bot.on('message', async (msg) => {
             bot.sendChatAction(chatId, 'typing');
             const response = await askGroq(text);
             
-            // ⚠️ NO PARSE MODE (Prevents Crashes)
-            return bot.sendMessage(chatId, response, { 
-                reply_to_message_id: msg.message_id
-            });
+            return safeReply(chatId, response, msg.message_id);
         }
     }
 
@@ -329,4 +337,4 @@ bot.on('message', async (msg) => {
     }
 });
 
-console.log('🤖 BOT ONLINE.');
+console.log('🤖 CRASH-PROOF BOT ONLINE.');
