@@ -122,7 +122,7 @@ module.exports = function(bot, state, utils) {
             let response = chatCompletion.choices?.[0]?.message?.content || "";
             if (!response || response.trim() === "") return "⚠️ Summarizer API returned blank.";
 
-            return `📊 <b>Daily Chat Summary (Since 5 AM)</b>\n━━━━━━━━━━\n\n${formatAiToHtml(response)}`;
+            return `📊 <b>Daily Chat Summary (Since 5 AM)</b>\n\n${formatAiToHtml(response)}`;
         } catch (error) { 
             return `⚠️ <b>Summarizer Error:</b> ${error.message}`; 
         }

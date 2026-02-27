@@ -9,47 +9,275 @@ module.exports = function(bot, state, config, utils, modules) {
         const chatId = String(query.message.chat.id); 
         const fromId = String(query.from.id);
         let name = query.from.first_name || "User";
-
-
-
-            if (data.startsWith('BUY_TIER_')) {
-        const [_, __, tier, targetChatId] = data.split('_');
         
-        // Tier details
-const tiers = {
-    'basic': { 
-        title: "AI Basic Access", 
-        price: 100, 
-        desc: "30 days of standard AI features, /summarize, and /ask." 
-    },
-    'full': { 
-        title: "AI Full Access", 
-        price: 500, 
-        desc: "30 days of Full Access: Persona switching and custom OpenRouter models." 
-    }
-};
 
-        const choice = tiers[tier];
+// FIND: if (data.startsWith('ACT_TOP_')) {
+// REPLACE THE WHOLE BLOCK WITH:
 
-        try {
-            // Delete the menu to keep chat clean
-            await bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
+// 📊 PAGINATED ACTIVITY
+        if (data.startsWith('ACT_PAGE_')) {
+            // Now splits into 5 parts because of the ID at the end
+            const parts = data.split('_');
+            const type = parts[2];
+            const page = parseInt(parts[3]);
+            const targetId = parts[4]; // The ID of the menu owner
 
-            // Send the specific invoice
-            await bot.sendInvoice(
-                targetChatId,
-                choice.title,
-                choice.desc,
-                `sub_${tier}_${targetChatId}`, // Payload stores the tier name!
-                "", 
-                "XTR", 
-                [{ label: "Premium", amount: choice.price }]
-            );
-        } catch (e) {
-            console.error("Invoice Error:", e.message);
+            // 🛑 SECURITY CHECK
+            if (fromId !== targetId) {
+                return bot.answerCallbackQuery(query.id, { text: "⚠️ This is not your menu!", show_alert: true });
+            }
+
+            const itemsPerPage = 15;
+            let dataSource = type === 'monthly' ? state.monthlyActivity : state.activityStats;
+
+            const allUsers = Object.entries(dataSource || {})
+                .filter(([key, val]) => !isNaN(key) && typeof val === 'object' && val.count)
+                .sort(([, a], [, b]) => b.count - a.count);
+
+            const totalPages = Math.ceil(allUsers.length / itemsPerPage);
+            const start = page * itemsPerPage;
+            const currentItems = allUsers.slice(start, start + itemsPerPage);
+
+            let lbText = `🏆 <b>Leaderboard - ${type.toUpperCase()}</b>\n<i>Page ${page + 1} of ${totalPages || 1}</i>\n\n`;
+            currentItems.forEach(([id, user], index) => {
+                lbText += `${start + index + 1}. <b>${user.name}</b>: <code>${user.count}</code>\n`;
+            });
+
+            // Pass the targetId to the Next/Back buttons too
+            const navButtons = [];
+            if (page > 0) navButtons.push({ text: "⬅️ Back", callback_data: `ACT_PAGE_${type}_${page - 1}_${targetId}` });
+            if (start + itemsPerPage < allUsers.length) navButtons.push({ text: "Next ➡️", callback_data: `ACT_PAGE_${type}_${page + 1}_${targetId}` });
+
+            const kb = [navButtons, [{ text: "🏠 Main Stats", callback_data: `ACT_STATS_MAIN_${targetId}` }]];
+            return bot.editMessageText(lbText, { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
         }
-        return bot.answerCallbackQuery(query.id);
-    }
+
+        // 🏠 MAIN STATS MENU (Returning from a page)
+        if (data.startsWith('ACT_STATS_MAIN_')) {
+            const targetId = data.replace('ACT_STATS_MAIN_', '');
+
+            // 🛑 SECURITY CHECK
+            if (fromId !== targetId) {
+                return bot.answerCallbackQuery(query.id, { text: "⚠️ This is not your menu!", show_alert: true });
+            }
+
+            const daily = state.activityStats.GLOBAL_STATS?.daily || 0;
+            const monthly = state.monthlyActivity.GLOBAL_STATS?.monthly || 0;
+            const allTime = state.activityStats.GLOBAL_STATS?.allTime || 0;
+            
+            const kb = [
+                [{ text: "☀️ Daily Top", callback_data: `ACT_PAGE_daily_0_${targetId}` }, { text: "📅 Monthly Top", callback_data: `ACT_PAGE_monthly_0_${targetId}` }],
+                [{ text: "🏆 All-Time Top", callback_data: `ACT_PAGE_alltime_0_${targetId}` }],
+                [{ text: "❌ Close", callback_data: `ACT_CLOSE_${targetId}` }]
+            ];
+            
+            return bot.editMessageText(`📊 <b>Group Message Totals</b>\n☀️ Today: ${daily}\n📅 Month: ${monthly}\n🌎 Total: ${allTime}`, { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
+        }
+
+        // ❌ CLOSE MENU (Already protected, just making sure you have it)
+        if (data.startsWith('ACT_CLOSE_')) {
+            if (fromId !== data.split('_')[2]) {
+                return bot.answerCallbackQuery(query.id, { text: "⚠️ This is not your menu!", show_alert: true });
+            }
+            return bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
+        }
+
+if (data === 'ACT_STATS_MAIN') {
+    const daily = state.activityStats?.GLOBAL_STATS?.daily || 0;
+    const monthly = state.monthlyActivity?.GLOBAL_STATS?.monthly || 0;
+    const allTime = state.activityStats?.GLOBAL_STATS?.allTime || 0;
+
+    const statsMsg = 
+        `📊 <b>Group Message Totals</b>\n` +
+        `\n` +
+        `☀️ <b>Today:</b> <code>${daily.toLocaleString()}</code>\n` +
+        `📅 <b>Month:</b> <code>${monthly.toLocaleString()}</code>\n` +
+        `🌎 <b>All-Time:</b> <code>${allTime.toLocaleString()}</code>\n` +
+        `\n` +
+        `<i>Use buttons for rankings:</i>`;
+
+    const kb = [
+        [{ text: "☀️ Daily Top", callback_data: "ACT_PAGE_daily_0" }, { text: "📅 Monthly Top", callback_data: "ACT_PAGE_monthly_0" }],
+        [{ text: "🌎 All-Time Top", callback_data: "ACT_PAGE_alltime_0" }],
+        [{ text: "❌ Close", callback_data: `ACT_CLOSE_${query.from.id}` }] // The only one that needs an ID
+    ];
+
+    return bot.editMessageText(statsMsg, {
+        chat_id: query.message.chat.id,
+        message_id: query.message.message_id,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: kb }
+    });
+}
+
+// 💎 TELEGRAM STARS AI PURCHASING
+        if (data.startsWith('BUY_TIER_')) {
+            const parts = data.split('_');
+            const tier = parts[2]; // 'basic' or 'full'
+            
+            let title, description, amount, photoUrl, payload;
+
+// 1. Configure the Tiers
+// 1. Configure the Tiers
+            if (tier === 'basic') {
+                title = "✨ Basic Tier";
+                description = "Instant Activation.";
+                amount = 100; // 100 Stars
+                photoUrl = "https://i.postimg.cc/BZHJZgQK/tier1.png"; 
+                payload = `AI_SUB_BASIC_${fromId}`;
+            } else {
+                title = "👑 Premium Tier";
+                description = "Instant Activation";
+                amount = 500; // 500 Stars
+                photoUrl = "https://i.postimg.cc/RVm4WHNN/tier2.png";
+                payload = `AI_SUB_FULL_${fromId}`;
+            }
+
+            // 2. Telegram Stars Configuration
+            const prices = [{ label: title, amount: amount }];
+            const providerToken = ""; // MUST be empty for Stars
+            const currency = "XTR";   // MUST be XTR for Stars
+
+            const invoiceOptions = {
+                photo_url: photoUrl,
+                photo_width: 800,
+                photo_height: 400,
+                need_name: false,
+                need_email: false,
+                need_phone_number: false,
+                need_shipping_address: false,
+                is_flexible: false,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: `⭐️ Pay ${amount} Stars`, pay: true }],
+                        [{ text: "❌ Cancel", callback_data: `ACT_CLOSE_${fromId}` }]
+                    ]
+                }
+            };
+
+            try {
+                // Delete the text menu to keep the chat clean
+                await bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
+
+                // Send the premium native invoice
+                await bot.sendInvoice(
+                    chatId,
+                    title,
+                    description,
+                    payload,
+                    providerToken,
+                    currency,
+                    prices,
+                    invoiceOptions
+                );
+                return bot.answerCallbackQuery(query.id);
+            } catch (err) {
+                console.error("Star Invoice Error:", err.message);
+                return bot.answerCallbackQuery(query.id, { text: "Error generating invoice.", show_alert: true });
+            }
+        }
+
+
+// 📂 GENRE MANAGEMENT - Show Numbered List
+        if (data.startsWith('ADDGENRE_SEL_')) {
+            const genre = data.split('_')[2];
+            const songs = state.musicDB[genre] || [];
+            
+            let listText = `📂 <b>Genre: ${genre}</b>\n\n`;
+            
+            if (songs.length === 0) {
+                listText += "<i>This genre is currently empty.</i>";
+            } else {
+                songs.forEach((song, index) => {
+                    listText += `${index + 1}. ${song.name}\n`;
+                });
+                listText += `\nSelect a number below to <b>Delete</b> that song:`;
+            }
+
+            let kb = [];
+            let row = [];
+            // Create a numbered keypad for deletion
+            songs.forEach((_, index) => {
+                row.push({ text: `${index + 1}`, callback_data: `DELSONG_${genre}_${index}` });
+                if (row.length === 5) { kb.push(row); row = []; }
+            });
+            if (row.length > 0) kb.push(row);
+
+            kb.push([{ text: "➕ Add New Song", callback_data: `ADDSONG_TO_${genre}` }]);
+            kb.push([{ text: "🔙 Back to Genres", callback_data: `ADDGENRE_BACK` }]);
+
+            return bot.editMessageText(listText, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: kb }
+            });
+        }
+
+        // 🗑️ DELETE SONG ACTION (Updates list in place)
+        if (data.startsWith('DELSONG_')) {
+            const [, genre, index] = data.split('_');
+            const songIndex = parseInt(index);
+
+            if (state.musicDB[genre] && state.musicDB[genre][songIndex]) {
+                const songName = state.musicDB[genre][songIndex].name;
+                
+                // Remove the song
+                state.musicDB[genre].splice(songIndex, 1);
+                saveData(config.FILES.MUSIC_DB, state.musicDB);
+                
+                await bot.answerCallbackQuery(query.id, { text: `🗑️ Deleted: ${songName}` });
+
+                // RE-GENERATE THE UPDATED LIST
+                const songs = state.musicDB[genre] || [];
+                let listText = `📂 <b>Genre: ${genre}</b> (Updated)\n\n`;
+                
+                if (songs.length === 0) {
+                    listText += "<i>This genre is now empty.</i>";
+                } else {
+                    songs.forEach((song, i) => {
+                        listText += `${i + 1}. ${song.name}\n`;
+                    });
+                    listText += `\nSelect a number below to <b>Delete</b>:`;
+                }
+
+                let kb = [];
+                let row = [];
+                songs.forEach((_, i) => {
+                    row.push({ text: `${i + 1}`, callback_data: `DELSONG_${genre}_${i}` });
+                    if (row.length === 5) { kb.push(row); row = []; }
+                });
+                if (row.length > 0) kb.push(row);
+
+                kb.push([{ text: "➕ Add New Song", callback_data: `ADDSONG_TO_${genre}` }]);
+                kb.push([{ text: "🔙 Back to Genres", callback_data: `ADDGENRE_BACK` }]);
+
+                return bot.editMessageText(listText, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: kb }
+                }).catch(() => {});
+            }
+        }
+
+        // 🔙 BACK TO GENRE SELECTION
+        if (data === 'ADDGENRE_BACK') {
+            let kb = []; let row = [];
+            Object.keys(state.musicDB).forEach(genre => {
+                row.push({ text: `${genre} (${state.musicDB[genre].length})`, callback_data: `ADDGENRE_SEL_${genre}` });
+                if (row.length === 2) { kb.push(row); row = []; }
+            });
+            if (row.length > 0) kb.push(row);
+            kb.push([{ text: "➕ Add New Genre", callback_data: `ADDGENRE_NEW` }, { text: "❌ Close", callback_data: `CANCEL_ADDSONG` }]);
+            
+            return bot.editMessageText("🎵 <b>Manage Music Library</b>\nSelect a genre:", {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: kb }
+            });
+        }
 
         // 📊 ACTIVITY MENU & PAGINATION
         if (data.startsWith('ACT_')) {
@@ -98,7 +326,7 @@ const tiers = {
                 const totalPages = Math.ceil(statsArray.length / pageSize);
                 const sliced = statsArray.slice(page * pageSize, (page + 1) * pageSize);
 
-                let text = `📊 <b>${title} Leaderboard (Page ${page + 1}/${totalPages})</b>\n━━━━━━━━━━\n\n`;
+                let text = `📊 <b>${title} Leaderboard (Page ${page + 1}/${totalPages})</b>\n\n`;
                 sliced.forEach((u, i) => {
                     text += `${(page * pageSize) + i + 1}. ${u.name}: <b>${u.count} msgs</b>\n`;
                 });
@@ -169,26 +397,41 @@ const tiers = {
 
         // 🔒 VERIFICATION LOGIC (Standard Accept)
         // 🔒 VERIFICATION LOGIC (Standard Accept)
+// 🔒 VERIFICATION UNMUTE LOGIC
+// 🔒 VERIFICATION LOGIC (Standard Accept)
         if (data.startsWith('VERIFY_ACCEPT_')) {
             let targetGroup = data.replace('VERIFY_ACCEPT_', '');
             try {
-                // 'opts' contains both flat (old API) and nested (new API) rules to force the unmute
+                // The pre-4PM flat permissions list
                 let opts = {
-                    can_send_messages: true, can_send_media_messages: true, can_send_polls: true, 
-                    can_send_other_messages: true, can_add_web_page_previews: true, can_change_info: true, 
-                    can_invite_users: true, can_pin_messages: true,
-                    permissions: {
-                        can_send_messages: true, can_send_audios: true, can_send_documents: true, 
-                        can_send_photos: true, can_send_videos: true, can_send_video_notes: true, 
-                        can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true, 
-                        can_add_web_page_previews: true, can_change_info: true, can_invite_users: true, 
-                        can_pin_messages: true, can_manage_topics: true 
-                    }
+                    can_send_messages: true,
+                    can_send_audios: true,
+                    can_send_documents: true,
+                    can_send_photos: true,
+                    can_send_videos: true,
+                    can_send_video_notes: true,
+                    can_send_voice_notes: true,
+                    can_send_polls: true,
+                    can_send_other_messages: true,
+                    can_add_web_page_previews: true,
+                    can_change_info: true,
+                    can_invite_users: true,
+                    can_pin_messages: true,
+                    can_manage_topics: true
                 };
                 
-                await bot.restrictChatMember(targetGroup, fromId, opts);
+                await bot.restrictChatMember(targetGroup, Number(fromId), opts);
                 bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
                 bot.sendMessage(chatId, "✅ <b>Rules accepted.</b> You have been granted permissions in the chat.", { parse_mode: 'HTML' });
+                if (state.pendingVerifications && state.pendingVerifications[fromId]) {
+                    bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] }, 
+                        { chat_id: targetGroup, message_id: state.pendingVerifications[fromId] }
+                    ).catch(()=>{});
+                    
+                    // Clean up memory
+                    delete state.pendingVerifications[fromId];
+                }
                 return bot.answerCallbackQuery(query.id);
             } catch (err) { 
                 return bot.answerCallbackQuery(query.id, { text: `API Error: ${err.message}`, show_alert: true }); 
@@ -205,22 +448,36 @@ const tiers = {
                 let member = await bot.getChatMember(channel, fromId);
                 if (['member', 'administrator', 'creator'].includes(member.status)) {
                     
+                    // The pre-4PM flat permissions list
                     let opts = {
-                        can_send_messages: true, can_send_media_messages: true, can_send_polls: true, 
-                        can_send_other_messages: true, can_add_web_page_previews: true, can_change_info: true, 
-                        can_invite_users: true, can_pin_messages: true,
-                        permissions: {
-                            can_send_messages: true, can_send_audios: true, can_send_documents: true, 
-                            can_send_photos: true, can_send_videos: true, can_send_video_notes: true, 
-                            can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true, 
-                            can_add_web_page_previews: true, can_change_info: true, can_invite_users: true, 
-                            can_pin_messages: true, can_manage_topics: true 
-                        }
+                        can_send_messages: true,
+                        can_send_audios: true,
+                        can_send_documents: true,
+                        can_send_photos: true,
+                        can_send_videos: true,
+                        can_send_video_notes: true,
+                        can_send_voice_notes: true,
+                        can_send_polls: true,
+                        can_send_other_messages: true,
+                        can_add_web_page_previews: true,
+                        can_change_info: true,
+                        can_invite_users: true,
+                        can_pin_messages: true,
+                        can_manage_topics: true
                     };
                     
-                    await bot.restrictChatMember(targetGroup, fromId, opts);
+                    await bot.restrictChatMember(targetGroup, Number(fromId), opts);
                     bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
                     bot.sendMessage(chatId, "✅ <b>Verification complete.</b> You have been granted full permissions in the group.", { parse_mode: 'HTML' });
+                    if (state.pendingVerifications && state.pendingVerifications[fromId]) {
+                    bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] }, 
+                        { chat_id: targetGroup, message_id: state.pendingVerifications[fromId] }
+                    ).catch(()=>{});
+                    
+                    // Clean up memory
+                    delete state.pendingVerifications[fromId];
+                }
                     return bot.answerCallbackQuery(query.id);
                 } else {
                     return bot.answerCallbackQuery(query.id, { text: "You haven't joined the channel yet! ❌", show_alert: true });
@@ -237,11 +494,17 @@ const tiers = {
             return bot.answerCallbackQuery(query.id, { text: "Cancelled." });
         }
         
-        if (data.startsWith('ADDGENRE_SEL_') && state.addSongState[fromId]) {
-            state.addSongState[fromId].genre = data.replace('ADDGENRE_SEL_', '');
+        // ➕ ADD SONG TRIGGER
+        if (data.startsWith('ADDSONG_TO_')) {
+            const genre = data.split('_')[2];
+            if (!state.addSongState[fromId]) state.addSongState[fromId] = { chatId: chatId };
+            
+            state.addSongState[fromId].genre = genre;
             state.addSongState[fromId].step = 'QUERY';
+            
             bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
-            const p = await bot.sendMessage(chatId, `🎵 <b>Genre: ${state.addSongState[fromId].genre}</b>\n\nSend the iTunes Search Query (e.g. 'Uptown Funk Bruno Mars')\n\n<i>Type /done when finished.</i>`, { reply_markup: { force_reply: true }, parse_mode: 'HTML' });
+            
+            const p = await bot.sendMessage(chatId, `🎵 <b>Genre: ${genre}</b>\n\nSend the iTunes Search Query (e.g. 'Uptown Funk Bruno Mars')\n\n<i>Type /done when finished.</i>`, { reply_markup: { force_reply: true }, parse_mode: 'HTML' });
             state.addSongState[fromId].promptId = p.message_id;
             return bot.answerCallbackQuery(query.id);
         }
@@ -368,14 +631,33 @@ const tiers = {
             }
         }
 
-        if (data.startsWith('EV_')) {
+if (data.startsWith('EV_')) {
             const parts = data.split('_');
             const menuOwnerId = parts[parts.length - 1]; 
-            if (fromId !== menuOwnerId) return bot.answerCallbackQuery(query.id, { text: "⚠️ This is not your menu! Type /events to open your own.", show_alert: true });
-
             const coreData = parts.slice(0, -1).join('_'); 
+
+            // 🛑 SECURITY GUARD: Check if the clicker is an Admin or Owner
+            const isGroupAdmin = await utils.isAdmin(bot, chatId, fromId, config);
+            const isAdmin = config.OWNER_IDS.includes(fromId) || isGroupAdmin;
+
+            // Define which actions are strictly for Admins
+            const isAdminAction = coreData === 'EV_ADMIN_MENU' || coreData.startsWith('EV_EDIT_') || coreData.startsWith('EV_DEL_') || coreData.startsWith('EV_FLD_');
+
+            // Block normal users from taking Admin actions
+            if (isAdminAction && !isAdmin) {
+                return bot.answerCallbackQuery(query.id, { text: "❌ Access Denied: Admin only.", show_alert: true });
+            }
+
+            // Block users from clicking other people's menus (unless they are an admin doing admin things)
+            if (fromId !== menuOwnerId && !isAdminAction && coreData !== 'EVSUB') {
+                return bot.answerCallbackQuery(query.id, { text: "⚠️ This is not your menu! Type /events to open your own.", show_alert: true });
+            }
+
             if (coreData === 'EV_ADMIN_MENU') return events.renderAdminEditList(chatId, query.message.message_id, fromId);
-            if (coreData === 'EV_BACK_MAIN') return events.renderPublicEventList(chatId, query.message.message_id, fromId);
+            
+            // We pass 'isAdmin' back into the main menu so the button stays hidden/visible correctly
+            if (coreData === 'EV_BACK_MAIN') return events.renderPublicEventList(chatId, query.message.message_id, fromId, null, isAdmin);
+            
             if (coreData === 'EV_CLOSE') return bot.deleteMessage(chatId, query.message.message_id).catch(()=>{});
 
             if (coreData.startsWith('EV_DEL_')) {
@@ -386,6 +668,7 @@ const tiers = {
             }
 
             if (coreData.startsWith('EV_EDIT_REM_')) return events.renderEventRemindersMenu(chatId, query.message.message_id, parseInt(coreData.split('_')[3]), fromId);
+            
             if (coreData.startsWith('EV_TOG_REM_')) {
                 const [, , , idxStr, valStr] = coreData.split('_');
                 const idx = parseInt(idxStr), val = parseInt(valStr);
@@ -397,7 +680,9 @@ const tiers = {
                     return events.renderEventRemindersMenu(chatId, query.message.message_id, idx, fromId);
                 }
             }
+            
             if (coreData.startsWith('EV_EDIT_')) return events.renderEventEditMenu(chatId, query.message.message_id, parseInt(coreData.split('_')[2]), fromId);
+            
             if (coreData.startsWith('EV_FLD_')) {
                 const field = coreData.split('_')[2]; 
                 const promptText = field === 'NAME' ? "📝 Send the new name:" : field === 'DATE' ? "📅 Send the new date (MM-DD):" : field === 'TIME' ? "⏰ Send the new time (e.g., 4:00 PM):" : "🌍 Send the new timezone (PST, CST, EST, GMT):";

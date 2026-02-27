@@ -54,7 +54,7 @@ module.exports = function(bot, state, utils, config, birthdaysModule) {
         const now = DateTime.now().setZone('America/New_York');
         if (now.hour === state.botConfig.activityResetHour) {
             let arr = Object.values(state.activityStats).sort((a,b) => b.count - a.count);
-            let msg = `📊 <b>Final Activity Leaderboard Before Reset</b>\n━━━━━━━━━━\n\n`;
+            let msg = `📊 <b>Final Activity Leaderboard Before Reset</b>\n\n`;
             if (arr.length === 0) {
                 msg += "No messages sent.";
             } else {

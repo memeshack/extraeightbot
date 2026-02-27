@@ -86,7 +86,7 @@ module.exports = function(bot, state) {
         if (!game) return;
         
         let scores = Object.values(game.scores).sort((a,b) => b.score - a.score);
-        let msg = `🏁 <b>SONG QUIZ OVER!</b>\n━━━━━━━━━━\n\n`;
+        let msg = `🏁 <b>SONG QUIZ OVER!</b>\n\n`;
         
         if (scores.length === 0) {
             msg += "Nobody scored any points. Better luck next time!";

@@ -6,6 +6,52 @@ module.exports = function(bot, state, config, utils, modules) {
     const { ai, music, connect4, events, birthdays } = modules;
 
 
+    // ⏰ DAILY RESET TRACKER (5:00 AM EST)
+    setInterval(async () => {
+        const now = DateTime.now().setZone('America/New_York');
+        
+        // Check if current hour matches the config (e.g., 5) and minutes are 00
+        if (now.hour === state.botConfig.activityResetHour && now.minute === 0) {
+            
+            // 1. Prepare the report for the logs
+            const dailyTotal = state.activityStats.GLOBAL_STATS?.daily || 0;
+            const reportChatId = "190190519"; // Your specific log chat
+            
+            const report = `🌅 <b>Daily Activity Reset</b>\n` +
+                           `━━━━━━━━━━\n` +
+                           `📅 Date: <b>${now.toFormat('yyyy-MM-dd')}</b>\n` +
+                           `☀️ Total Messages Today: <b>${dailyTotal.toLocaleString()}</b>\n` +
+                           `━━━━━━━━━━\n` +
+                           `<i>Daily stats have been wiped.</i>`;
+
+            try {
+                // 2. Send the totals to your specific chat ID
+                await bot.sendMessage(reportChatId, report, { parse_mode: 'HTML' });
+                console.log(`✅ Reset report sent to ${reportChatId}`);
+
+                // 3. WIPE DAILY STATS
+                // Reset Global Daily Counter
+                if (state.activityStats.GLOBAL_STATS) {
+                    state.activityStats.GLOBAL_STATS.daily = 0;
+                }
+
+                // Reset individual user daily counts
+                Object.keys(state.activityStats).forEach(uid => {
+                    if (uid !== 'GLOBAL_STATS') {
+                        state.activityStats[uid].count = 0;
+                    }
+                });
+
+                // 4. Save the cleared data
+                saveData(config.FILES.ACTIVITY, state.activityStats);
+                console.log("🧹 Daily activity stats have been wiped.");
+
+            } catch (err) {
+                console.error("❌ Reset Error:", err.message);
+            }
+        }
+    }, 60000); // Check every minute
+
 
     // 🎧 THE HANDSHAKE (Add this right here!)
     bot.on('pre_checkout_query', async (query) => {
@@ -21,28 +67,7 @@ module.exports = function(bot, state, config, utils, modules) {
     // ... your existing bot.on('message') logic starts below ...
     // 🚪 WELCOME / LEAVE & BAN CHECK (Supergroup Safe)
         bot.on('chat_member', async (event) => {
-        // 👇 ADD THIS LINE to completely ignore channel joins
-        if (event.chat.type === 'channel') return;
-
-        const chatId = String(event.chat.id); 
-        const userId = String(event.new_chat_member.user.id);
-        const user = event.new_chat_member.user;
-        // 👇 ADD THIS LINE 👇
-        console.log(`🔥 CHAT MEMBER EVENT: ${user.first_name} went from ${event.old_chat_member.status} to ${event.new_chat_member.status}`);
-
-        // BAN CHECK
-        // ... (rest of your code)
-
-        // BAN CHECK
-        if (chatId === config.TARGET_GROUP_ID) {
-            if (['member', 'restricted'].includes(event.new_chat_member.status)) {
-                if (state.bannedUsers.includes(userId)) {
-                    bot.banChatMember(chatId, userId).catch(() => {});
-                    return;
-                }
-            }
-        }
-    async function hasPremium(chatId) {
+         async function hasPremium(chatId) {
         // Owner always has premium
         if (chatId === config.OWNER_ID) return true;
         
@@ -56,76 +81,134 @@ module.exports = function(bot, state, config, utils, modules) {
         return true;
     }
         
+const chatId = String(event.chat.id);
+    const userId = String(event.new_chat_member.user.id);
+    const user = event.new_chat_member.user;
 
-        
-// A join is when the new status is 'member'/'restricted' AND the old status wasn't already 'member'/'restricted'
-       
-        const oldStatus = event.old_chat_member.status;
-        const newStatus = event.new_chat_member.status;
-        
-        // These 4 statuses mean the user is currently inside the chat
-        const activeStatuses = ['member', 'creator', 'administrator', 'restricted'];
-        const wasInChat = ['member', 'creator', 'administrator', 'restricted'].includes(oldStatus);
-        const isNowInChat = ['member', 'creator', 'administrator', 'restricted'].includes(newStatus);
-        const isJoin = !wasInChat && isNowInChat;
-        const isLeave = wasInChat && !isNowInChat;
+    const oldStatus = event.old_chat_member.status;
+    const newStatus = event.new_chat_member.status;
 
-        // ONLY fire welcome/leave messages in the main group, not the channel
-        if (chatId === config.TARGET_GROUP_ID) {
-            
+    // Strict Join/Leave Detection
+    const isJoin = ['left', 'kicked'].includes(oldStatus) && ['member', 'restricted'].includes(newStatus);
+    const isLeave = ['member', 'restricted', 'administrator', 'creator'].includes(oldStatus) && ['left', 'kicked'].includes(newStatus);
 
-            // WELCOME LISTENER
-            if (isJoin && userId === state.botId) {
-                // Record who added the bot
-                const adderId = String(event.from.id);
-                const adderName = event.from.first_name || "Unknown";
-                const chatTitle = event.chat.title || "Private Chat";
-                
-                state.groups[chatId] = {
-                    title: chatTitle,
-                    addedBy: adderName,
-                    addedById: adderId,
-                    date: DateTime.now().setZone('America/New_York').toFormat('yyyy-MM-dd HH:mm:ss')
-                };
-                saveData(config.FILES.GROUPS, state.groups);
-            
-                // 1. Create the invisible tag
-                // We use a Zero-Width Space (&#8203;) and wrap it in a mention link
-                const invisibleTag = `<a href="tg://user?id=${userId}">&#8203;</a>`;
-                
-                // 2. Insert the tag at the start of the message
-                let welcomeMsg = invisibleTag + state.botConfig.welcomeText.replace('{name}', user.first_name);
-                
-                if (['talk', 'media', 'channel'].includes(state.botConfig.verifyMode)) {
-                    let perms = state.botConfig.verifyMode === 'talk' 
-                        ? { can_send_messages: false }
-                        : { 
-                            can_send_messages: true, can_send_audios: false, can_send_documents: false, 
-                            can_send_photos: false, can_send_videos: false, can_send_video_notes: false, 
-                            can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false 
-                        };
+
+// 🚨 NEW: ENFORCE CHANNEL MEMBERSHIP (The Leaver Punisher)
+    if (state.botConfig.verifyMode === 'channel' && state.botConfig.verifyChannel) {
+        const configuredChan = String(state.botConfig.verifyChannel).toLowerCase();
+        const eventId = String(event.chat.id);
+        const eventUsername = event.chat.username ? `@${event.chat.username.toLowerCase()}` : '';
+
+        // Check if the event matches the channel ID OR the @username
+        if (eventId === configuredChan || eventUsername === configuredChan) {
+            if (isLeave && userId !== state.botId) {
+                try {
+                    // 1. Mute them in the main group
+                    await bot.restrictChatMember(config.TARGET_GROUP_ID, userId, { permissions: { can_send_messages: false } });
                     
-                    if (state.botConfig.verifyMode === 'channel') {
-                        perms = { can_send_messages: false };
-                    }
-
-                    try { await bot.restrictChatMember(chatId, userId, { permissions: perms }); } catch(e) {}
+                    // 2. DM them the new verification link
+                    const me = await bot.getMe();
+                    let kb = [[{ text: "✅ Tap to Verify", url: `https://t.me/${me.username}?start=verify_${config.TARGET_GROUP_ID}` }]];
                     
-                    let kb = [[{ text: "✅ Tap to Verify", url: `https://t.me/${state.botUsername}?start=verify_${chatId}` }]];
-                    await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
-                } else {
-                    await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'HTML' });
+                    await bot.sendMessage(userId, "⚠️ <b>Action Required</b>\n\nYou left the required verification channel, so your typing permissions in the main group have been revoked. Please rejoin the channel and verify again!", { 
+                        parse_mode: 'HTML', 
+                        reply_markup: { inline_keyboard: kb } 
+                    });
+                } catch (e) {
+                    console.error("Failed to punish channel leaver:", e.message);
                 }
             }
+            // Stop processing here so it doesn't run the group leave logic
+            return; 
+        }
+    }
 
-            // LEAVE LISTENER
-            if (isLeave && userId !== state.botId && state.botConfig.chatLink !== "") {
-                let leftMsg = state.botConfig.leaveText.replace('{name}', user.first_name);
-                let dmText = `${leftMsg}\n\nHere is the link if you want to return: ${state.botConfig.chatLink}`;
-                await bot.sendMessage(userId, dmText).catch(()=>{});
+    // 1. Ignore any OTHER channel events that aren't our verify channel
+    if (event.chat.type === 'channel') return;
+
+    if (chatId === config.TARGET_GROUP_ID) {
+        
+        // 3. BAN CHECK
+        if (isJoin && state.bannedUsers.includes(userId)) {
+            bot.banChatMember(chatId, userId).catch(() => {});
+            return;
+        }
+
+        // 4. WELCOME & VERIFICATION LISTENER (For Normal Users)
+        if (isJoin && userId !== state.botId) {
+            
+            // The guaranteed ping using their actual name
+            const linkedName = `<a href="tg://user?id=${userId}">${user.first_name}</a>`;
+            let welcomeMsg = state.botConfig.welcomeText.replace('{name}', linkedName);
+            
+            // Verification Flow
+            if (['talk', 'media', 'channel'].includes(state.botConfig.verifyMode)) {
+                let perms = state.botConfig.verifyMode === 'talk' 
+                    ? { can_send_messages: false }
+                    : { 
+                        can_send_messages: true, can_send_audios: false, can_send_documents: false, 
+                        can_send_photos: false, can_send_videos: false, can_send_video_notes: false, 
+                        can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false 
+                    };
+                
+                if (state.botConfig.verifyMode === 'channel') {
+                    perms = { can_send_messages: false };
+                }
+
+                // Restrict the user
+                try { await bot.restrictChatMember(chatId, userId, { permissions: perms }); } catch(e) {}
+                
+                try {
+                    const me = await bot.getMe();
+                    // We append the joining user's ID to the start parameter
+                    let kb = [[{ 
+                        text: "✅ Tap to Verify", 
+                        url: `https://t.me/${me.username}?start=verify_${chatId}_${userId}` 
+                    }]];
+                    
+                    const sentMsg = await bot.sendMessage(chatId, welcomeMsg, { 
+                        parse_mode: 'HTML', 
+                        reply_markup: { inline_keyboard: kb } 
+                    });
+                    
+                    // Track the message ID so the callback can remove the button later
+                    if (!state.pendingVerifications) state.pendingVerifications = {};
+                    state.pendingVerifications[userId] = sentMsg.message_id;
+
+                } catch(e) {
+                    console.error("Failed to send welcome message:", e.message);
+                }
+            } else {
+                // No verification, just welcome
+                await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'HTML' }).catch(()=>{});
             }
         }
-    });
+
+        // 5. AUTO-DISCOVERY (For when the Bot itself is added)
+        if (isJoin && userId === state.botId) {
+            const adderId = String(event.from.id);
+            const adderName = event.from.first_name || "Unknown";
+            const chatTitle = event.chat.title || "Private Chat";
+            
+            state.groups[chatId] = {
+                title: chatTitle,
+                addedBy: adderName,
+                addedById: adderId,
+                date: require('luxon').DateTime.now().setZone('America/New_York').toFormat('yyyy-MM-dd HH:mm:ss')
+            };
+            require('../dataManager').saveData(config.FILES.GROUPS, state.groups);
+        }
+
+        // 6. LEAVE LISTENER (DM the user when they leave the GROUP)
+        if (isLeave && userId !== state.botId && state.botConfig.chatLink !== "") {
+            let leftMsg = state.botConfig.leaveText.replace('{name}', user.first_name);
+            let dmText = `${leftMsg}\n\nHere is the link if you want to return: ${state.botConfig.chatLink}`;
+            await bot.sendMessage(userId, dmText).catch((e)=>{
+                console.error("Failed to send leave DM:", e.message);
+            });
+        }
+    }
+});
 
     bot.on('message', async (msg) => {
 
@@ -155,9 +238,17 @@ module.exports = function(bot, state, config, utils, modules) {
 
 
         // 🔒 DEEP LINK VERIFICATION LISTENER (Private DMs)
+        // 🔒 DEEP LINK VERIFICATION LISTENER (Private DMs)
         if (msg.chat && msg.chat.type === 'private') {
             if (text.startsWith('/start verify_')) {
-                let targetGroup = text.split('_')[1];
+                const parts = text.split('_');
+                const targetGroup = parts[1];
+                const expectedUserId = parts[2]; // The ID we embedded in the link above
+
+                // 🛑 SECURITY CHECK: Ensure the clicker is the actual user who joined
+                if (expectedUserId && fromId !== expectedUserId) {
+                    return bot.sendMessage(chatId, "⚠️ <b>Access Denied</b>\n\nThis verification link was generated for another user. Please use the button specifically meant for you in the group.", { parse_mode: 'HTML' });
+                }
                 
                 if (state.botConfig.verifyMode === 'channel') {
                     let channel = state.botConfig.verifyChannel;
@@ -175,17 +266,21 @@ module.exports = function(bot, state, config, utils, modules) {
                 }
                 return;
             }
-            if (config.OWNER_IDS.includes(fromId) && msg.sticker) {
-                return bot.sendMessage(chatId, `🎯 <b>Sticker ID:</b>\n<code>${msg.sticker.file_id}</code>\n\n<i>Copy and paste this into the code!</i>`, { parse_mode: 'HTML' });
-            }
         }
 
         if (!msg.chat || text === "") return;
         
         const isTargetGroup = (chatId === config.TARGET_GROUP_ID);
         const isOwner = config.OWNER_IDS.includes(fromId);
+        
+        // NEW: Check if this user has any delegated permissions
+        const hasDelegatedPerms = state.delegatedPerms[fromId] && 
+            (state.delegatedPerms[fromId].permaban || 
+             state.delegatedPerms[fromId].addsongs || 
+             state.delegatedPerms[fromId].aiconfig);
 
-        if (!isTargetGroup && !isOwner) return;
+        // 🛑 UPDATED SECURITY GATE: Allow if in group OR if user is Owner/Promoted
+        if (!isTargetGroup && !isOwner && !hasDelegatedPerms) return;
 
         if (isTargetGroup && state.bannedUsers.includes(fromId)) {
             bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
@@ -196,38 +291,45 @@ module.exports = function(bot, state, config, utils, modules) {
         let dataChanged = false;
         
         // 📈 UPDATE DATABASES & ACTIVITY LEADERBOARD
-        // Inside your bot.on('message', async (msg) => { ...
-
-        const userId = fromId; // <--- ADD THIS LINE to fix the ReferenceError
-        const userName = msg.from.first_name || "Unknown";
-
         if (!msg.from.is_bot && chatId === config.TARGET_GROUP_ID) {
-            // 1. Daily Activity
-            if (!state.activityStats[userId]) state.activityStats[userId] = { name: userName, count: 0 };
-            state.activityStats[userId].count++;
-            
-            // 2. Monthly Activity
-            if (!state.monthlyActivity[userId]) state.monthlyActivity[userId] = { name: userName, count: 0 };
-            state.monthlyActivity[userId].count++;
+            // 1. Ensure GLOBAL structures exist
+            if (!state.activityStats.GLOBAL_STATS) {
+                state.activityStats.GLOBAL_STATS = { daily: 0, allTime: 0 };
+            }
+            if (!state.monthlyActivity.GLOBAL_STATS) {
+                state.monthlyActivity.GLOBAL_STATS = { monthly: 0 };
+            }
 
-            // 3. All-Time Activity (Stored in Reputation JSON)
-            if (!state.reputations[userId]) state.reputations[userId] = { name: userName, score: 0, msg_count: 0 };
-            state.reputations[userId].msg_count = (state.reputations[userId].msg_count || 0) + 1;
+            // 2. Initialize USER structures in both databases if missing
+            if (!state.activityStats[fromId]) {
+                state.activityStats[fromId] = { name: name, count: 0 };
+                dataChanged = true;
+            }
+            if (!state.monthlyActivity[fromId]) {
+                state.monthlyActivity[fromId] = { name: name, count: 0 };
+                dataChanged = true;
+            }
 
-            // Save the changes
-            saveData(config.FILES.ACTIVITY, state.activityStats);
-            saveData(config.FILES.MONTHLY_ACTIVITY, state.monthlyActivity);
-            saveData(config.FILES.REP, state.reputations);
-        }
+            // 3. Sync Name Changes across all databases
+            if (state.activityStats[fromId].name !== name) {
+                state.activityStats[fromId].name = name;
+                state.monthlyActivity[fromId].name = name;
+                dataChanged = true;
+            }
+
+            // 4. Increment counts if it's NOT a command
+            if (!text.startsWith('/')) {
+                state.activityStats.GLOBAL_STATS.daily += 1;
+                state.activityStats.GLOBAL_STATS.allTime += 1;
+                state.monthlyActivity.GLOBAL_STATS.monthly += 1;
                 
-        if (state.activityStats[fromId].name !== name) {
-            state.activityStats[fromId].name = name;
-            dataChanged = true;
+                state.activityStats[fromId].count += 1;
+                state.monthlyActivity[fromId].count += 1;
+                
+                dataChanged = true;
+            }
         }
-        if (!text.startsWith('/')) {
-            state.activityStats[fromId].count += 1;
-            dataChanged = true;
-        }
+        
         if (state.reputations[fromId] && state.reputations[fromId].name !== name) { 
             state.reputations[fromId].name = name; dataChanged = true; 
         }
@@ -249,6 +351,7 @@ module.exports = function(bot, state, config, utils, modules) {
         
         if (dataChanged) { 
             saveData(config.FILES.ACTIVITY, state.activityStats);
+            saveData(config.FILES.MONTHLY_ACTIVITY, state.monthlyActivity);
             saveData(config.FILES.REP, state.reputations); 
             saveData(config.FILES.BDAY, state.birthdays); 
             saveData(config.FILES.C4_STAT, state.c4Stats); 
@@ -500,7 +603,7 @@ module.exports = function(bot, state, config, utils, modules) {
         if (cmd === '/whereami' && isOwner) {
             const entries = Object.entries(state.groups);
             let groupList = `<b>bot instance location report</b>\n`;
-            groupList += `Total Active Connections: <b>${entries.length}</b>\n━━━━━━━━━━\n\n`;
+            groupList += `Total Active Connections: <b>${entries.length}</b>\n\n`;
             
             if (entries.length === 0) {
                 groupList += "<i>No group data recorded yet.</i>";
@@ -566,20 +669,36 @@ module.exports = function(bot, state, config, utils, modules) {
             } else { return utils.safeReply(chatId, "⚠️ Reply to the user you want to gulag.", msg.message_id); }
         }
 
-        if (cmd === '/commands') {
-            let menu = `<b>COMMAND DIRECTORY</b>\n━━━━━━━━━━\n\n`;
-            if (isOwner) menu += `<b>[ OWNER CONTROLS ]</b>\n• /promote (reply)\n• $restart\n• /setwelcome [text]\n• /setleave [text]\n• /setchatlink [url]\n• /setverify [none|talk|media|channel]\n• /setchannel [@channel]\n• /setactivityreset [hour]\n\n`;
-            if (utils.hasPerm(fromId, 'addsongs') || utils.hasPerm(fromId, 'aiconfig') || utils.hasPerm(fromId, 'permaban')) {
+if (cmd === '/commands') {
+            // 1. Check the user's roles
+            const isGroupAdmin = await utils.isAdmin(chatId, fromId); // Or utils.isAdmin(bot, chatId, fromId, config) depending on your setup
+            const hasDelegatedPerms = utils.hasPerm(fromId, 'addsongs') || utils.hasPerm(fromId, 'aiconfig') || utils.hasPerm(fromId, 'permaban');
+
+            let menu = `<b>COMMAND DIRECTORY</b>\n\n`;
+
+            // 2. ONLY show to the Bot Owner
+            if (isOwner) {
+                menu += `<b>[ OWNER CONTROLS ]</b>\n• /promote (reply)\n• $restart\n• /setwelcome [text]\n• /setleave [text]\n• /setchatlink [url]\n• /setverify [none|talk|media|channel]\n• /setchannel [@channel]\n• /setactivityreset [hour]\n\n`;
+            }
+
+            // 3. ONLY show to Delegated Admins (and Owner)
+            if (hasDelegatedPerms || isOwner) {
                 menu += `<b>[ DELEGATED ADMIN ]</b>\n`;
-                if (utils.hasPerm(fromId, 'addsongs')) menu += `• /addsong\n`;
-                if (utils.hasPerm(fromId, 'aiconfig')) menu += `• /newmodel [id]\n• /changerole [prompt]\n• /currentrole\n`;
-                if (utils.hasPerm(fromId, 'permaban')) menu += `• /permban [id]\n• /unpermban [id]\n`;
+                if (utils.hasPerm(fromId, 'addsongs') || isOwner) menu += `• /addsong\n`;
+                if (utils.hasPerm(fromId, 'aiconfig') || isOwner) menu += `• /newmodel [id]\n• /changerole [prompt]\n• /currentrole\n`;
+                if (utils.hasPerm(fromId, 'permaban') || isOwner) menu += `• /permban [id]\n• /unpermban [id]\n`;
                 menu += `\n`;
             }
-            if (await utils.isAdmin(chatId, fromId)) menu += `<b>[ ADMIN CONTROLS ]</b>\n• /toggleai\n• /gulag (reply)\n• /newevent\n• /summarize\n• /setbday MM-DD\n• /testbday\n• /memories\n• /forget [num]\n\n`;
-            
+
+            // 4. ONLY show to actual Group Admins (and Owner)
+            if (isGroupAdmin || isOwner) {
+                menu += `<b>[ ADMIN CONTROLS ]</b>\n• /toggleai\n• /gulag (reply)\n• /newevent\n• /summarize\n• /setbday MM-DD\n• /testbday\n• /memories\n• /forget [num]\n\n`;
+            }
+
+            // 5. Show to EVERYONE
             menu += `<b>[ GENERAL CONTROLS ]</b>\n• /yo [text]\n• /tl (reply)\n• /songquiz\n• /songtop\n• /connect4\n• /c4top\n• /activity\n• /events\n• /bdays\n• /topcredit\n• /worstcredit\n• /mycredit\n• + / - (reply)\n• /when (reply)`;
-            return utils.safeReply(chatId, menu, null, 'HTML'); 
+            
+            return bot.sendMessage(chatId, menu, { parse_mode: 'HTML' }).catch(()=>{}); 
         }
 
 
@@ -630,18 +749,31 @@ if (cmd === '/buyai') {
 
 
 if (cmd === '/activity') {
-    const kb = [
-        [{ text: "☀️ Daily", callback_data: `ACT_MENU_daily_${fromId}` }],
-        [{ text: "📅 Monthly", callback_data: `ACT_MENU_monthly_${fromId}` }, { text: "🏆 All-Time", callback_data: `ACT_MENU_alltime_${fromId}` }],
-        [{ text: "❌ Close", callback_data: `ACT_CLOSE_${fromId}` }]
-    ];
+            const daily = state.activityStats.GLOBAL_STATS?.daily || 0;
+            const monthly = state.monthlyActivity.GLOBAL_STATS?.monthly || 0;
+            const allTime = state.activityStats.GLOBAL_STATS?.allTime || 0;
+            
+            // We stamp the user's ID (fromId) onto EVERY button
+            const kb = [
+                [{ text: "☀️ Daily Top", callback_data: `ACT_PAGE_daily_0_${fromId}` }, { text: "📅 Monthly Top", callback_data: `ACT_PAGE_monthly_0_${fromId}` }],
+                [{ text: "🌎 All-Time Top", callback_data: `ACT_PAGE_alltime_0_${fromId}` }],
+                [{ text: "❌ Close", callback_data: `ACT_CLOSE_${fromId}` }]
+            ];
+            
+            return bot.sendMessage(chatId, `📊 <b>Group Message Totals</b>\n☀️ <b>Today:</b> ${daily.toLocaleString()}\n📅 <b>Month:</b> ${monthly.toLocaleString()}\n🌎 <b>Total:</b> ${allTime.toLocaleString()}\n<i>Use buttons for rankings:</i>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
+        
 
-    return bot.sendMessage(chatId, `📊 <b>Activity Leaderboard</b>\nWhich timeframe would you like to view?`, { 
-        parse_mode: 'HTML', 
-        reply_markup: { inline_keyboard: kb } 
-    });
+    return bot.sendMessage(chatId, 
+        `📊 <b>Group Message Totals</b>\n` +
+        `\n` +
+        `☀️ <b>Today:</b> <code>${daily.toLocaleString()}</code>\n` +
+        `📅 <b>Month:</b> <code>${monthly.toLocaleString()}</code>\n` +
+        `🌎 <b>All-Time:</b> <code>${allTime.toLocaleString()}</code>\n` +
+        `\n` +
+        `<i>Use buttons for rankings:</i>`, 
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } }
+    );
 }
-
         if (cmd === '/tl' || cmd === '/translate') {
             // This grabs the replied-to text OR the text you typed after the command
             let textToTranslate = msg.reply_to_message?.text || msg.reply_to_message?.caption || query;
@@ -658,7 +790,7 @@ if (cmd === '/activity') {
         if (cmd === '/songtop' || cmd === '/musictop') {
             const arr = Object.values(state.musicStats).sort((a, b) => b.points - a.points).slice(0, 15);
             if (arr.length === 0) return utils.safeReply(chatId, "No Music Quiz games played yet.");
-            let b = "🏆 <b>Song Quiz Leaderboard</b>\n━━━━━━━━━━\n\n";
+            let b = "🏆 <b>Song Quiz Leaderboard</b>\n\n";
             arr.forEach((u, i) => b += `${i + 1}. ${u.name}: <b>${u.points} Pts</b> (${u.wins} Wins)\n`);
             return utils.safeReply(chatId, b, null, 'HTML');
         }
@@ -695,16 +827,28 @@ if (cmd === '/activity') {
         if (cmd === '/c4top' || cmd === '/c4leaderboard') {
             const arr = Object.values(state.c4Stats).sort((a, b) => b.wins - a.wins).slice(0, 15);
             if (arr.length === 0) return utils.safeReply(chatId, "No Connect 4 games played yet.");
-            let b = "🏆 <b>Connect 4 Leaderboard</b>\n━━━━━━━━━━\n\n";
+            let b = "🏆 <b>Connect 4 Leaderboard</b>\n\n";
             arr.forEach((u, i) => b += `${i + 1}. ${u.name}: <b>${u.wins} Wins</b> (${u.losses} L)\n`);
             return utils.safeReply(chatId, b, null, 'HTML');
         }
 
-        if (msg.reply_to_message?.from) {
-            const lower = text.toLowerCase();
-            let isUpvote = text === '+' || lower.includes('thank you');
-            let isDownvote = text === '-' || lower.includes('fuck you');
+// 📈 SOCIAL CREDIT SYSTEM
+        if (msg.reply_to_message?.from && msg.text) {
+            const text = msg.text.trim();
+            
+            // 1. Define the RegEx rules
+            const posContains = /\b(good looks|my guy|thank u|preesh|ty|good boy|good girl|thank you)\b/i;
+            const negContains = /\b(fuck u|eat shit|you suck|you'?re an asshole|you'?re a prick|you motherfucker|i hate you|bad boy|bad girl|die in a hole|fuck you)\b/i;
+            
+            // Exact matches for emojis and strict words (anchored by ^ and $)
+            const posExact = /^(👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿|❤️|🩷|🧡|💛|💚|💙|🩵|💜|🖤|🩶|🤍|🤎|💔|❣️|💕|💞|💓|💗|💖|💘|💝|💟|\+)$/i;
+            const negExact = /^(kys|die|👎|👎🏻|👎🏼|👎🏽|👎🏾|👎🏿|-)$/i;
 
+            // 2. Evaluate using the new rules
+            let isUpvote = posExact.test(text) || posContains.test(text);
+            let isDownvote = negExact.test(text) || negContains.test(text);
+
+            // 3. Your original, untouched logic
             if (isUpvote || isDownvote) {
                 const rId = String(msg.reply_to_message.from.id);
                 if (rId !== fromId && rId !== state.botId) {
@@ -712,13 +856,18 @@ if (cmd === '/activity') {
                     if (!state.repCooldowns[cdKey] || (Date.now() - state.repCooldowns[cdKey]) >= 60000) {
                         state.repCooldowns[cdKey] = Date.now(); 
                         if (!state.reputations[rId]) state.reputations[rId] = { score: 0, name: msg.reply_to_message.from.first_name || "User" };
+                        
+                        // Increment/Decrement by 20
                         state.reputations[rId].score += isUpvote ? 20 : -20; 
                         saveData(config.FILES.REP, state.reputations);
                         
                         try {
+                            // Send the sticker
                             await bot.sendSticker(chatId, isUpvote ? config.STICKERS.PLUS_CREDIT : config.STICKERS.MINUS_CREDIT, { reply_to_message_id: msg.reply_to_message.message_id });
                         } catch (err) {
-                            await utils.safeReply(chatId, `<b>${name}</b> ${isUpvote ? "increased" : "decreased"} credit. (Score: <b>${state.reputations[rId].score}</b>)`, msg.reply_to_message.message_id, 'HTML');
+                            // Fallback text
+                            const senderName = msg.from.first_name || "User";
+                            await utils.safeReply(chatId, `<b>${senderName}</b> ${isUpvote ? "increased" : "decreased"} credit. (Score: <b>${state.reputations[rId].score}</b>)`, msg.reply_to_message.message_id, 'HTML');
                         }
                     }
                 }
@@ -727,14 +876,14 @@ if (cmd === '/activity') {
 
         if (cmd === '/topcredit' || cmd === '/toprep') {
             const arr = Object.values(state.reputations).sort((a, b) => b.score - a.score).slice(0, 15);
-            let b = "<b>Highest Social Credit</b>\n━━━━━━━━━━\n\n"; 
+            let b = "<b>Highest Social Credit</b>\n\n"; 
             arr.forEach((u, i) => b += `${i + 1}. ${u.name}: <b>${u.score}</b>\n`);
             return utils.safeReply(chatId, arr.length ? b : "No Social Credit scores yet.", null, 'HTML');
         }
         
         if (cmd === '/worstcredit' || cmd === '/worstrep') {
             const arr = Object.values(state.reputations).sort((a, b) => a.score - b.score).slice(0, 15);
-            let b = "<b>Lowest Social Credit</b>\n━━━━━━━━━━\n\n"; 
+            let b = "<b>Lowest Social Credit</b>\n\n"; 
             arr.forEach((u, i) => b += `${i + 1}. ${u.name}: <b>${u.score}</b>\n`);
             return utils.safeReply(chatId, arr.length ? b : "No Social Credit scores yet.", null, 'HTML');
         }
@@ -793,13 +942,42 @@ if (cmd === '/activity') {
             return;
         }
 
-        if (cmd === '/newevent' && await utils.isAdmin(chatId, fromId)) {
-            const p = await bot.sendMessage(chatId, "📝 Event name?", { reply_to_message_id: msg.message_id, reply_markup: { force_reply: true } });
-            state.eventSetupState[fromId] = { chatId: chatId, step: 'NAME', triggerMsgId: msg.message_id, lastPromptId: p.message_id, eventName: '', reminders: [] };
+        if (cmd === '/newevent') {
+            // 🛑 SECURITY GUARD: Check if the user is an Admin or Owner
+            const isGroupAdmin = await utils.isAdmin(bot, chatId, fromId, config);
+            const isAdmin = isOwner || isGroupAdmin;
+            
+            if (!isAdmin) {
+                return bot.sendMessage(chatId, "❌ <b>Access Denied:</b> Only admins can create events.", { 
+                    parse_mode: 'HTML', 
+                    reply_to_message_id: msg.message_id 
+                });
+            }
+
+            const p = await bot.sendMessage(chatId, "📝 Event name?", { 
+                reply_to_message_id: msg.message_id, 
+                reply_markup: { force_reply: true } 
+            });
+            
+            state.eventSetupState[fromId] = { 
+                chatId: chatId, 
+                step: 'NAME', 
+                triggerMsgId: msg.message_id, 
+                lastPromptId: p.message_id, 
+                eventName: '', 
+                reminders: [] 
+            };
             return;
         }
         
-        if (cmd === '/events') return events.renderPublicEventList(chatId, null, fromId, msg.message_id);
+        if (cmd === '/events') {
+            // Check if they are owner or admin
+            const isGroupAdmin = await utils.isAdmin(bot, chatId, fromId, config);
+            const isAdmin = isOwner || isGroupAdmin;
+            
+            // Pass the isAdmin flag to the module so it hides the edit button from normals
+            return events.renderPublicEventList(chatId, null, fromId, msg.message_id, isAdmin);
+        }
 
         if (cmd === '/setbday' && await utils.isAdmin(chatId, fromId)) {
             if (!/^\d{2}-\d{2}$/.test(query)) return bot.sendMessage(chatId, "Use: /setbday MM-DD");

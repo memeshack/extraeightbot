@@ -31,16 +31,20 @@ module.exports = function(bot, state) {
     }
 
 async function isAdmin(bot, chatId, userId, config) {
-    const sUserId = String(userId);
-    const sOwnerId = String(config.TOKEN_OWNER_ID || config.OWNER_ID); // Use whichever key you have
+    // 1. Check hardcoded owner first (using config.OWNER_ID based on your repo)
+    if (config && String(userId) === String(config.OWNER_ID)) return true;
 
-    console.log(`🔍 ADMIN CHECK: User is ${sUserId}, Owner is ${sOwnerId}`);
+    // 2. Private chats always allow the user
+    if (chatId > 0) return true;
 
-    // 1. DIRECT MATCH (Should work for you)
-    if (sUserId === sOwnerId) {
-        console.log("✅ Match found: User is Owner.");
-        return true;
+    try {
+        const member = await bot.getChatMember(chatId, userId);
+        return ['administrator', 'creator'].includes(member.status);
+    } catch (e) {
+        // If it's a private chat or API error, return false for safety
+        return false;
     }
+
 
     // 2. Private Chat bypass
     if (chatId > 0) return true;

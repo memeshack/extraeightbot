@@ -8,7 +8,13 @@ const state = require('./state');
 const { saveData } = require('./dataManager');
 
 // 2. Initialize Bot
-const bot = new TelegramBot(config.TOKEN, { polling: true });
+const bot = new TelegramBot(config.TOKEN, { 
+    polling: { 
+        interval: 100, 
+        autoStart: true,
+        params: { allowed_updates: JSON.stringify(["message", "callback_query", "chat_member", "my_chat_member", "pre_checkout_query"]) }
+    } 
+});
 bot.on('polling_error', (error) => console.log("⚠️ Polling Error:", error.code))
 
 bot.on('raw_update', (update) => {
@@ -67,6 +73,8 @@ function logCrash(err, origin) {
         }
     } catch (e) {}
 }
+
+
 
 process.on('unhandledRejection', (reason) => logCrash(reason, 'unhandledRejection'));
 process.on('uncaughtException', (err) => logCrash(err, 'uncaughtException'));

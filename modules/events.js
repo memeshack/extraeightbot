@@ -34,7 +34,7 @@ module.exports = function(bot, state, utils) {
         return kb;
     }
 
-    async function renderPublicEventList(chatId, msgIdToEdit, userId, replyToId = null) {
+    async function renderPublicEventList(chatId, msgIdToEdit, userId, replyToId = null, isAdmin = false) {
         state.calendarEvents.sort((a,b) => a.timestamp - b.timestamp);
         
         let list = "📅 No upcoming events.";
@@ -48,6 +48,7 @@ module.exports = function(bot, state, utils) {
             }
             list = `🗓️ <b>Upcoming Events:</b>\n\n${eventStrings.join('\n')}`;
             
+            // Add subscription buttons for everyone
             for (let i = 0; i < state.calendarEvents.length; i++) {
                 let ev = state.calendarEvents[i];
                 let evId = ev.id || String(ev.timestamp);
@@ -58,10 +59,12 @@ module.exports = function(bot, state, utils) {
             }
         }
         
-        let adminStatus = await utils.isAdmin(chatId, userId);
-        if (adminStatus) {
-            kb.push([{ text: "⚙️ Manage Events", callback_data: `EV_ADMIN_MENU_${userId}` }]);
+        // 🛑 SECURITY CHECK: Only append the Admin menu if they are verified
+        if (isAdmin) {
+            kb.push([{ text: "⚙️ Admin: Edit Events", callback_data: `EV_ADMIN_MENU_${userId}` }]);
         }
+        
+        // Close button for everyone
         kb.push([{ text: "❌ Close", callback_data: `EV_CLOSE_${userId}` }]);
         
         const opts = { 
